@@ -1,30 +1,40 @@
 // app/api/stream/[id]/[ep]/route.ts
-// Server-side proxy to the configured backend.
+// Server-side stream proxy.
 //
-// Behavior:
-// - If NEXT_PUBLIC_BACKEND_URL is not set → 502 with clear "Backend Required" error
-// - If NEXT_PUBLIC_BACKEND_URL points to this app's own /api (demo mode) → return mock HLS
-// - Otherwise → proxy to the real backend via fetchEpisodeStream()
+// Flow:
+//   1. Try Consumet (animepahe provider) — real anime streams
+//   2. If Consumet is unreachable or returns no sources → fall back to mock HLS
+//   3. If CONSUMET_URL is not set → use mock HLS directly
+//
+// Consumet contract (lib/consumet.ts):
+//   GET {CONSUMET_URL}/anime/animepahe/info/{anilistId}        → episode list
+//   GET {CONSUMET_URL}/anime/animepahe/watch?episodeId={id}    → stream sources
+//
+// NOTE: The public api.consumet.org is DEAD (HTTP 451). Self-host:
+//   https://github.com/consumet/api.consumet.org
+//   Then set CONSUMET_URL="https://your-instance.com" in .env.local
 
 import { NextResponse } from "next/server";
-import { getBackendConfig } from "@/lib/backend";
+import { fetchConsumetStream, getConsumetConfig } from "@/lib/consumet";
 
 export const dynamic = "force-dynamic";
+// Consumet can be slow — allow up to 30s
+export const maxDuration = 30;
 
-// ─── Mock backend (used when NEXT_PUBLIC_BACKEND_URL points to this app) ───
-// Public test HLS streams — verified working, CORS-enabled.
+// ─── Mock HLS streams (used when Consumet is unavailable) ───
+// Public test streams — verified working, CORS-enabled.
 const MOCK_STREAMS: { url: string; quality: string }[] = [
   {
     url: "https://test-streams.mux.dev/x36xhzz/x36xhzz.m3u8",
-    quality: "1080p",
+    quality: "1080p (demo)",
   },
   {
     url: "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8",
-    quality: "720p",
+    quality: "720p (demo)",
   },
 ];
 
-function mockResponse(animeId: number, episode: number) {
+function mockResponse(animeId: number, episode: number, reason?: string) {
   const pick = MOCK_STREAMS[animeId % MOCK_STREAMS.length];
   return {
     stream: {
@@ -36,6 +46,7 @@ function mockResponse(animeId: number, episode: number) {
     duration: 600,
     episodeTitle: `Episode ${episode}`,
     thumbnail: null,
+    fallbackReason: reason ?? null,
   };
 }
 
@@ -54,38 +65,48 @@ export async function GET(
     );
   }
 
-  const cfg = getBackendConfig();
+  const cfg = getConsumetConfig();
 
-  // 1. Backend URL is missing → mandatory error
-  if (!cfg.configured) {
+  // ─── Try Consumet first ───
+  if (cfg.configured) {
+    const stream = await fetchConsumetStream(animeId, episode);
+    if (stream) {
+      return NextResponse.json({
+        stream: {
+          url: stream.url,
+          type: stream.type,
+          quality: stream.quality,
+        },
+        sources: [
+          {
+            url: stream.url,
+            type: stream.type,
+            quality: stream.quality,
+          },
+        ],
+        duration: null,
+        episodeTitle: `Episode ${episode}`,
+        thumbnail: null,
+        provider: "consumet/animepahe",
+      });
+    }
+
+    // Consumet failed — fall through to mock with reason
     return NextResponse.json(
-      {
-        error:
-          "Backend not configured. Set NEXT_PUBLIC_BACKEND_URL to enable streaming.",
-      },
-      { status: 502 },
+      mockResponse(
+        animeId,
+        episode,
+        "Consumet API unreachable or returned no sources. Showing demo stream.",
+      ),
     );
   }
 
-  // 2. Backend URL points to this app's own API (demo mode) → return mock data
-  //    This avoids infinite self-proxy loops.
-  const isSelfReferential =
-    cfg.url.includes("localhost:3000") ||
-    cfg.url.includes("127.0.0.1:3000") ||
-    cfg.url.includes("space-z.ai");
-
-  if (isSelfReferential) {
-    return NextResponse.json(mockResponse(animeId, episode));
-  }
-
-  // 3. Real backend → proxy to it
-  const { fetchEpisodeStream } = await import("@/lib/backend");
-  const result = await fetchEpisodeStream(animeId, episode);
-  if (!result) {
-    return NextResponse.json(
-      { error: "Backend returned no stream for this episode." },
-      { status: 502 },
-    );
-  }
-  return NextResponse.json(result);
+  // ─── Consumet not configured → use mock ───
+  return NextResponse.json(
+    mockResponse(
+      animeId,
+      episode,
+      "CONSUMET_URL not set. Showing demo stream. Set CONSUMET_URL to enable real episode streaming.",
+    ),
+  );
 }
