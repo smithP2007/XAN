@@ -249,24 +249,54 @@ export async function fetchAllAnimeStreamSources(
 
 /**
  * Test whether the stored cf_clearance cookie works.
- * Returns the HTTP status and a snippet of the response body.
+ * Returns detailed diagnostics including IP mismatch detection.
  */
 export async function testStoredCookie(): Promise<{
   status: number;
   ok: boolean;
   bodySnippet: string;
   hasCookie: boolean;
+  diagnostics: {
+    serverIp: string | null;
+    savedFromIp: string | null;
+    ipMismatch: boolean;
+    userAgent: string | null;
+    cookieLength: number;
+    hasCfClearance: boolean;
+    responseServer: string | null;
+    cfMitigated: string | null;
+  };
 }> {
   const stored = await getStoredCookie();
   if (!stored) {
-    return { status: 0, ok: false, bodySnippet: "", hasCookie: false };
+    return {
+      status: 0,
+      ok: false,
+      bodySnippet: "",
+      hasCookie: false,
+      diagnostics: {
+        serverIp: null,
+        savedFromIp: null,
+        ipMismatch: false,
+        userAgent: null,
+        cookieLength: 0,
+        hasCfClearance: false,
+        responseServer: null,
+        cfMitigated: null,
+      },
+    };
   }
+
+  // Get the server's outbound IP for diagnostics
+  const { getServerIp } = await import("./cf-cookie-store");
+  const serverIp = await getServerIp();
+  const ipMismatch =
+    stored.savedFromIp != null && serverIp != null && stored.savedFromIp !== serverIp;
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
 
   try {
-    // Use a known anime ID (Cowboy Bebop) for the test
     const url = `${ALLANIME_EPISODES}?id=PGcK4wGnqDoeihT6n&episode=1&type=sub`;
     const res = await fetch(url, {
       signal: controller.signal,
@@ -275,16 +305,28 @@ export async function testStoredCookie(): Promise<{
         Accept: "application/json",
         Referer: "https://allmanga.to/",
         Origin: "https://allmanga.to",
-        Cookie: `cf_clearance=${stored.value}`,
+        Cookie: stored.value,
       },
     });
 
     const body = await res.text();
+    const cfMitigated = res.headers.get("cf-mitigated");
+
     return {
       status: res.status,
-      ok: res.ok && !body.includes("Just a moment"),
+      ok: res.ok && !body.includes("Just a moment") && !cfMitigated,
       bodySnippet: body.substring(0, 500),
       hasCookie: true,
+      diagnostics: {
+        serverIp,
+        savedFromIp: stored.savedFromIp,
+        ipMismatch,
+        userAgent: stored.userAgent,
+        cookieLength: stored.value.length,
+        hasCfClearance: stored.value.includes("cf_clearance="),
+        responseServer: res.headers.get("server"),
+        cfMitigated,
+      },
     };
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
@@ -293,6 +335,16 @@ export async function testStoredCookie(): Promise<{
         ok: false,
         bodySnippet: "Request timed out",
         hasCookie: true,
+        diagnostics: {
+          serverIp,
+          savedFromIp: stored.savedFromIp,
+          ipMismatch,
+          userAgent: stored.userAgent,
+          cookieLength: stored.value.length,
+          hasCfClearance: stored.value.includes("cf_clearance="),
+          responseServer: null,
+          cfMitigated: null,
+        },
       };
     }
     return {
@@ -300,6 +352,16 @@ export async function testStoredCookie(): Promise<{
       ok: false,
       bodySnippet: err instanceof Error ? err.message : "Unknown error",
       hasCookie: true,
+      diagnostics: {
+        serverIp,
+        savedFromIp: stored.savedFromIp,
+        ipMismatch,
+        userAgent: stored.userAgent,
+        cookieLength: stored.value.length,
+        hasCfClearance: stored.value.includes("cf_clearance="),
+        responseServer: null,
+        cfMitigated: null,
+      },
     };
   } finally {
     clearTimeout(timeout);

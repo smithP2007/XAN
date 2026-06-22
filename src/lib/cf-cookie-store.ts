@@ -1,8 +1,7 @@
 // lib/cf-cookie-store.ts
-// ✅ Persistent server-side storage for the Cloudflare cf_clearance cookie.
-// The user manually solves the CF challenge in their browser, copies the cookie,
-// and pastes it into the /settings page. We store it here and use it for all
-// subsequent AllAnime API requests.
+// ✅ Persistent server-side storage for Cloudflare cookies.
+// Stores the full cookie string (not just cf_clearance) so multiple CF cookies
+// can be passed through. Also stores the user-agent and a client-side flag.
 
 import { promises as fs } from "fs";
 import path from "path";
@@ -10,10 +9,13 @@ import path from "path";
 const COOKIE_FILE = path.join(process.cwd(), ".cf-cookie.json");
 
 export interface StoredCookie {
+  // The full cookie header value, e.g. "cf_clearance=abc123; __cf_bm=xyz789"
   value: string;
   savedAt: number; // Date.now()
   expiresAt: number | null; // epoch ms, or null if unknown
   userAgent: string; // UA must match the one used to solve the challenge
+  // The IP address of the client that saved the cookie (for diagnostics)
+  savedFromIp: string | null;
 }
 
 let cached: StoredCookie | null = null;
@@ -45,7 +47,6 @@ async function writeToDisk(cookie: StoredCookie | null): Promise<void> {
 }
 
 export async function getStoredCookie(): Promise<StoredCookie | null> {
-  // Reload from disk at most every 5 seconds
   const now = Date.now();
   if (cached && now - cacheLoadedAt < 5000) {
     return cached;
@@ -55,16 +56,42 @@ export async function getStoredCookie(): Promise<StoredCookie | null> {
   return cached;
 }
 
+/**
+ * Sanitize the cookie value:
+ * - Trim whitespace
+ * - Strip surrounding quotes
+ * - If the value contains "cf_clearance=", keep it as-is (full cookie string)
+ * - If the value is just the raw cookie value (no "="), wrap it as cf_clearance=<value>
+ * - Also handles the case where the user pasted "cf_clearance=value" with the name
+ */
+function sanitizeCookieValue(input: string): string {
+  let v = input.trim();
+  // Strip surrounding quotes
+  if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
+    v = v.slice(1, -1);
+  }
+  v = v.trim();
+  // If it already contains "cf_clearance=", it's a full cookie string — keep as-is
+  if (v.includes("cf_clearance=")) {
+    return v;
+  }
+  // Otherwise, wrap it as cf_clearance=<value>
+  return `cf_clearance=${v}`;
+}
+
 export async function saveCookie(
   value: string,
   userAgent: string,
+  savedFromIp: string | null = null,
   expiresAt: number | null = null,
 ): Promise<StoredCookie> {
+  const sanitized = sanitizeCookieValue(value);
   const cookie: StoredCookie = {
-    value,
+    value: sanitized,
     savedAt: Date.now(),
     expiresAt,
     userAgent,
+    savedFromIp,
   };
   cached = cookie;
   cacheLoadedAt = Date.now();
@@ -91,4 +118,19 @@ export async function isCookieValid(): Promise<{
   const ageMinutes = Math.round((now - cookie.savedAt) / 60000);
   const isExpired = cookie.expiresAt != null ? now > cookie.expiresAt : false;
   return { hasCookie: true, isExpired, ageMinutes };
+}
+
+/**
+ * Get the server's outbound IP (for diagnostics — shows why CF might reject).
+ */
+export async function getServerIp(): Promise<string | null> {
+  try {
+    const res = await fetch("https://api.ipify.org?format=json", {
+      signal: AbortSignal.timeout(5000),
+    });
+    const json = await res.json();
+    return json?.ip ?? null;
+  } catch {
+    return null;
+  }
 }

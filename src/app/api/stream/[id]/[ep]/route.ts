@@ -48,7 +48,7 @@ function mockResponse(animeId: number, episode: number, reason?: string) {
 }
 
 export async function GET(
-  _request: Request,
+  request: Request,
   context: { params: Promise<{ id: string; ep: string }> },
 ) {
   const { id, ep } = await context.params;
@@ -62,13 +62,12 @@ export async function GET(
     );
   }
 
-  // ─── 1. Try AllAnime ───
-  // We need the AniList anime title to search AllAnime. The stream proxy doesn't
-  // have it directly, so we accept it as a query parameter from the watch page.
-  const url = new URL(_request.url);
+  const url = new URL(request.url);
   const title = url.searchParams.get("title") || "";
+  const allowDemo = url.searchParams.get("allowDemo") === "true";
 
-  if (title) {
+  // ─── 1. Try AllAnime (unless allowDemo is set — then skip straight to demo) ───
+  if (!allowDemo && title) {
     try {
       const show = await findShowByAniListId(animeId, title);
       if (show) {
