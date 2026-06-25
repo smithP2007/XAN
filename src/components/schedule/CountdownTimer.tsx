@@ -1,64 +1,73 @@
 "use client";
 
 // components/schedule/CountdownTimer.tsx
-// ✅ Live countdown for airing episodes — ticks every second.
-
 import { useEffect, useState } from "react";
 
 interface CountdownTimerProps {
-  airingAt: number; // Unix timestamp (seconds)
+  airingAt: number;
+}
+
+interface Remaining {
+  total: number;
+  days: number;
+  hours: number;
+  minutes: number;
+  seconds: number;
+  isAired: boolean;
+  isImminent: boolean;
+}
+
+function computeRemaining(airingAt: number): Remaining {
+  const now = Math.floor(Date.now() / 1000);
+  const total = airingAt - now;
+  if (total <= 0) {
+    return { total: 0, days: 0, hours: 0, minutes: 0, seconds: 0, isAired: true, isImminent: false };
+  }
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  return { total, days, hours, minutes, seconds, isAired: false, isImminent: total <= 3600 };
 }
 
 export function CountdownTimer({ airingAt }: CountdownTimerProps) {
-  const [now, setNow] = useState(Math.floor(Date.now() / 1000));
+  const [remaining, setRemaining] = useState<Remaining>(() => computeRemaining(airingAt));
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setNow(Math.floor(Date.now() / 1000));
+    const id = setInterval(() => {
+      setRemaining(computeRemaining(airingAt));
     }, 1000);
-    return () => clearInterval(interval);
-  }, []);
+    return () => clearInterval(id);
+  }, [airingAt]);
 
-  const diff = airingAt - now;
-
-  if (diff <= 0) {
+  if (remaining.isAired) {
     return (
-      <span className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground bg-xan-card px-2 py-0.5 rounded-full">
-        Aired
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-mono">
+        AIRED
       </span>
     );
   }
 
-  const days = Math.floor(diff / 86400);
-  const hours = Math.floor((diff % 86400) / 3600);
-  const minutes = Math.floor((diff % 3600) / 60);
-  const seconds = diff % 60;
+  if (remaining.isImminent) {
+    const text = `${remaining.minutes}m ${remaining.seconds.toString().padStart(2, "0")}s`;
+    return (
+      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-md bg-xan-crimson/15 text-xan-crimson border border-xan-crimson/40 font-mono animate-pulse">
+        ● {text}
+      </span>
+    );
+  }
 
-  // Crimson accent if airing within 1 hour
-  const isSoon = diff < 3600;
-
-  const formatPart = (val: number, label: string) =>
-    val > 0 ? `${val}${label} ` : "";
-
-  const countdown =
-    days > 0
-      ? `${formatPart(days, "d")}${formatPart(hours, "h")}`
-      : hours > 0
-        ? `${formatPart(hours, "h")}${formatPart(minutes, "m")}`
-        : `${minutes}m ${seconds}s`;
-
+  let text: string;
+  if (remaining.days > 0) {
+    text = `${remaining.days}d ${remaining.hours}h`;
+  } else if (remaining.hours > 0) {
+    text = `${remaining.hours}h ${remaining.minutes}m`;
+  } else {
+    text = `${remaining.minutes}m ${remaining.seconds.toString().padStart(2, "0")}s`;
+  }
   return (
-    <span
-      className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${
-        isSoon
-          ? "bg-xan-crimson/20 text-xan-crimson"
-          : "bg-emerald-500/15 text-emerald-400"
-      }`}
-    >
-      {isSoon && (
-        <span className="w-1.5 h-1.5 rounded-full bg-xan-crimson animate-pulse" />
-      )}
-      {countdown.trim()}
+    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-md bg-white/5 text-muted-foreground border border-xan-border font-mono">
+      {text}
     </span>
   );
 }

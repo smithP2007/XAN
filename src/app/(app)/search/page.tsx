@@ -1,9 +1,6 @@
 "use client";
 
 // app/(app)/search/page.tsx
-// ✅ "use client" — input state + URL params
-// ✅ Bug 1 fix: useSearchParams wrapped in Suspense to avoid deopt
-
 import { useState, useEffect, useCallback, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 import { Search as SearchIcon, SearchX } from "lucide-react";
@@ -18,7 +15,17 @@ import type { Anime, PageInfo } from "@/types/anime";
 
 export default function SearchPage() {
   return (
-    <Suspense fallback={<div className="max-w-7xl mx-auto px-4 md:px-6 py-8"><div className="h-8 w-48 bg-xan-card rounded animate-shimmer" /></div>}>
+    <Suspense
+      fallback={
+        <div className="max-w-7xl mx-auto px-4 md:px-6 py-8">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+            {Array.from({ length: 12 }, (_, i) => (
+              <AnimeCardSkeleton key={i} />
+            ))}
+          </div>
+        </div>
+      }
+    >
       <SearchPageInner />
     </Suspense>
   );
@@ -46,7 +53,6 @@ function SearchPageInner() {
 
   const debouncedQuery = useDebounce(query, 400);
 
-  // Update URL when query/genres/tags/sort change (shareable)
   useEffect(() => {
     const params = new URLSearchParams();
     if (debouncedQuery) params.set("q", debouncedQuery);
@@ -58,17 +64,12 @@ function SearchPageInner() {
     setPage(1);
   }, [debouncedQuery, selectedGenres, selectedTags, sort, router]);
 
-  // Fetch results
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(false);
 
-    const params = new URLSearchParams({
-      page: String(page),
-      perPage: "24",
-      sort,
-    });
+    const params = new URLSearchParams({ page: String(page), perPage: "24", sort });
     if (debouncedQuery) params.set("q", debouncedQuery);
     if (selectedGenres.length > 0) params.set("genres", selectedGenres.join(","));
     if (selectedTags.length > 0) params.set("tags", selectedTags.join(","));
@@ -106,41 +107,35 @@ function SearchPageInner() {
     );
   }, []);
 
-  const handleClearTags = useCallback(() => setSelectedTags([]), []);
-
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-8 space-y-6">
-      {/* Header */}
       <div className="space-y-1">
         <h1 className="text-2xl md:text-3xl font-display font-bold text-foreground flex items-center gap-2">
           <SearchIcon className="h-6 w-6 text-xan-crimson" />
           Search
         </h1>
         <p className="text-sm text-muted-foreground">
-          Find anime by title, filter by genre, and sort however you like.
+          Find anime by title, filter by genre or demographic, and sort however you like.
         </p>
       </div>
 
-      {/* Search bar */}
       <SearchBar value={query} onChange={setQuery} />
 
       <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-6">
-        {/* Sidebar filters */}
         <FilterPanel
           selectedGenres={selectedGenres}
           onGenreToggle={handleGenreToggle}
           onClearGenres={() => setSelectedGenres([])}
+          selectedTags={selectedTags}
+          onTagToggle={handleTagToggle}
+          onClearTags={() => setSelectedTags([])}
           sort={sort}
           onSortChange={setSort}
           format={format}
           onFormatChange={setFormat}
           total={data?.length}
-          selectedTags={selectedTags}
-          onTagToggle={handleTagToggle}
-          onClearTags={handleClearTags}
         />
 
-        {/* Results */}
         <div className="space-y-4 min-w-0">
           {error ? (
             <ErrorCard message="Search failed. Please try again." />
@@ -158,7 +153,6 @@ function SearchPageInner() {
                 ))}
               </div>
 
-              {/* Pagination */}
               {pageInfo && (page > 1 || pageInfo.hasNextPage) && (
                 <div className="flex items-center justify-center gap-3 pt-4">
                   <Button

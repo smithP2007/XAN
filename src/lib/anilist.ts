@@ -5,8 +5,10 @@ import {
   AnimeSchema,
   PageInfoSchema,
   AnimeDetailSchema,
+  AiringScheduleSchema,
   type Anime,
   type AnimeDetail,
+  type AiringSchedule,
   type PageInfo,
 } from "@/types/anime";
 import {
@@ -33,8 +35,6 @@ interface FetchDetailResult {
   data: AnimeDetail | null;
 }
 
-// ✅ Bug #18: AbortController for request timeout
-// ✅ Bug #3: Bounded retry counter (MAX 1 retry, not infinite recursion)
 async function fetchFromAniList(
   query: string,
   variables: Record<string, unknown>,
@@ -52,7 +52,7 @@ async function fetchFromAniList(
       },
       body: JSON.stringify({ query, variables }),
       signal: controller.signal,
-      next: { revalidate: 300 }, // ✅ ISR: cache for 5 minutes
+      next: { revalidate: 300 },
     });
 
     if (!response.ok) {
@@ -71,21 +71,16 @@ async function fetchFromAniList(
     return await response.json();
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") {
-      console.error(
-        "[AniList] Request timed out after",
-        REQUEST_TIMEOUT_MS,
-        "ms",
-      );
+      console.error("[AniList] Request timed out after", REQUEST_TIMEOUT_MS, "ms");
     } else {
       console.error("[AniList] Fetch failed:", error);
     }
     return null;
   } finally {
-    clearTimeout(timeout); // ✅ Bug #19: Always clean up timeout
+    clearTimeout(timeout);
   }
 }
 
-// ─── Paginated fetcher (for lists of anime) ───
 async function fetchList(
   query: string,
   variables: Record<string, unknown>,
@@ -93,7 +88,6 @@ async function fetchList(
   const json = await fetchFromAniList(query, variables);
   if (!json) return null;
 
-  // Validate response shape before accessing nested properties
   const media = (json as any)?.data?.Page?.media;
   const pageInfoRaw = (json as any)?.data?.Page?.pageInfo;
 
@@ -102,12 +96,9 @@ async function fetchList(
     return null;
   }
 
-  // ✅ Validate each item individually — skip bad items instead of crashing
   const validated = media
     .map((item: unknown) => AnimeSchema.safeParse(item))
-    .filter(
-      (r): r is z.ZodSafeParseSuccess<Anime> => r.success,
-    )
+    .filter((r): r is z.ZodSafeParseSuccess<Anime> => r.success)
     .map((r) => r.data);
 
   const pageInfo = PageInfoSchema.safeParse(pageInfoRaw);
@@ -126,7 +117,6 @@ async function fetchList(
   };
 }
 
-// ─── Convenience Functions ───
 export async function fetchTrending(
   page = 1,
   perPage = 20,
@@ -159,56 +149,6 @@ export async function fetchSearch(
   });
 }
 
-// ─── Airing Schedule ───
-export interface AiringScheduleEntry {
-  id: number;
-  airingAt: number;
-  episode: number;
-  media: Anime;
-}
-
-export async function fetchAiringSchedule(
-  startTime: number,
-  endTime: number,
-  page = 1,
-  perPage = 50,
-): Promise<{ data: AiringScheduleEntry[]; hasNextPage: boolean } | null> {
-  const json = await fetchFromAniList(AIRING_SCHEDULE_QUERY, {
-    page,
-    perPage,
-    airingAtGreater: startTime,
-    airingAtLesser: endTime,
-  });
-  if (!json) return null;
-
-  const schedules = (json as any)?.data?.Page?.airingSchedules;
-  const pageInfo = (json as any)?.data?.Page?.pageInfo;
-  if (!Array.isArray(schedules)) {
-    console.error("[AniList] Unexpected airing schedule response shape");
-    return null;
-  }
-
-  // Validate each schedule entry, skip invalid ones
-  const validated: AiringScheduleEntry[] = [];
-  for (const entry of schedules) {
-    if (!entry?.media) continue;
-    const parsed = AnimeSchema.safeParse(entry.media);
-    if (parsed.success) {
-      validated.push({
-        id: entry.id,
-        airingAt: entry.airingAt,
-        episode: entry.episode,
-        media: parsed.data,
-      });
-    }
-  }
-
-  return {
-    data: validated,
-    hasNextPage: pageInfo?.hasNextPage ?? false,
-  };
-}
-
 export async function fetchAnimeDetail(
   id: number,
 ): Promise<FetchDetailResult | null> {
@@ -230,19 +170,70 @@ export async function fetchAnimeDetail(
   return { data: parsed.data };
 }
 
-// ─── Helper: Fetch anime by genre or tag ───
-// If the category is actually a tag (Shounen, Seinen, etc.), query via tag_in.
 export async function fetchByGenre(
   genre: string,
   page = 1,
   perPage = 20,
 ): Promise<FetchResult | null> {
-  const categoryIsTag = isTag(genre);
+  if (isTag(genre)) {
+    return fetchList(SEARCH_QUERY, {
+      search: null,
+      page,
+      perPage,
+      tags: [genre],
+    });
+  }
   return fetchList(SEARCH_QUERY, {
     search: null,
     page,
     perPage,
-    genres: categoryIsTag ? undefined : [genre],
-    tags: categoryIsTag ? [genre] : undefined,
+    genres: [genre],
   });
+}
+
+export interface AiringScheduleResult {
+  data: AiringSchedule[];
+  pageInfo: PageInfo;
+}
+
+export async function fetchAiringSchedule(
+  startTime: number,
+  endTime: number,
+  page = 1,
+  perPage = 50,
+): Promise<AiringScheduleResult | null> {
+  const json = await fetchFromAniList(AIRING_SCHEDULE_QUERY, {
+    page,
+    perPage,
+    airingAtGreater: startTime,
+    airingAtLesser: endTime,
+  });
+  if (!json) return null;
+
+  const schedulesRaw = (json as any)?.data?.Page?.airingSchedules;
+  const pageInfoRaw = (json as any)?.data?.Page?.pageInfo;
+  if (!Array.isArray(schedulesRaw)) {
+    console.error("[AniList] AiringSchedule: response shape unexpected");
+    return null;
+  }
+
+  const validated = schedulesRaw
+    .map((item: unknown) => AiringScheduleSchema.safeParse(item))
+    .filter((r): r is z.ZodSafeParseSuccess<AiringSchedule> => r.success)
+    .map((r) => r.data);
+
+  const pageInfo = PageInfoSchema.safeParse(pageInfoRaw);
+
+  return {
+    data: validated,
+    pageInfo: pageInfo.success
+      ? pageInfo.data
+      : {
+          currentPage: 1,
+          hasNextPage: false,
+          lastPage: null,
+          perPage: 50,
+          total: null,
+        },
+  };
 }

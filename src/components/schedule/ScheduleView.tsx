@@ -1,114 +1,101 @@
 "use client";
 
 // components/schedule/ScheduleView.tsx
-// ✅ Client component with day-tab state.
-
 import { useState } from "react";
+import { CalendarDays, Clock } from "lucide-react";
+import type { AiringSchedule } from "@/types/anime";
 import { ScheduleCard } from "./ScheduleCard";
-import type { Anime } from "@/types/anime";
-import { Calendar } from "lucide-react";
-
-export interface ScheduleEntry {
-  id: number;
-  airingAt: number;
-  episode: number;
-  media: Anime;
-}
 
 interface ScheduleViewProps {
-  schedule: ScheduleEntry[];
+  byDay: Record<number, AiringSchedule[]>;
 }
 
-const DAYS = [
-  { label: "Mon", value: 1 },
-  { label: "Tue", value: 2 },
-  { label: "Wed", value: 3 },
-  { label: "Thu", value: 4 },
-  { label: "Fri", value: 5 },
-  { label: "Sat", value: 6 },
-  { label: "Sun", value: 0 },
-];
+const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
+const DAY_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"] as const;
 
-export function ScheduleView({ schedule }: ScheduleViewProps) {
-  // Bug 7 fix: use getUTCDay() consistently — the page groups by UTC,
-  // so the view must also use UTC to avoid day-of-week mismatch for non-UTC users.
+export function ScheduleView({ byDay }: ScheduleViewProps) {
   const today = new Date().getUTCDay();
-  const [selectedDay, setSelectedDay] = useState(today);
+  const [activeDay, setActiveDay] = useState<number>(today);
 
-  // Group by day of week (UTC)
-  const byDay: Record<number, ScheduleEntry[]> = {};
-  for (const entry of schedule) {
-    const day = new Date(entry.airingAt * 1000).getUTCDay();
-    if (!byDay[day]) byDay[day] = [];
-    byDay[day].push(entry);
-  }
-
-  // Sort each day by time
-  for (const day of Object.keys(byDay)) {
-    byDay[Number(day)].sort((a, b) => a.airingAt - b.airingAt);
-  }
-
-  const todayEntries = byDay[selectedDay] ?? [];
+  const entries = byDay[activeDay] ?? [];
+  const dayOrder = [1, 2, 3, 4, 5, 6, 0];
 
   return (
     <div className="space-y-6">
-      {/* Day tabs */}
-      <div className="flex gap-2 overflow-x-auto no-scrollbar pb-2">
-        {DAYS.map((day) => {
-          const isToday = day.value === today;
-          const isSelected = day.value === selectedDay;
-          const count = byDay[day.value]?.length ?? 0;
+      <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1 -mx-1 px-1">
+        {dayOrder.map((dayIdx) => {
+          const isToday = dayIdx === today;
+          const isActive = dayIdx === activeDay;
+          const count = (byDay[dayIdx] ?? []).length;
           return (
             <button
-              key={day.value}
-              onClick={() => setSelectedDay(day.value)}
-              className={`flex flex-col items-center px-4 py-2 rounded-xl transition-all border min-w-[64px] ${
-                isSelected
-                  ? "bg-gradient-to-r from-xan-crimson to-xan-violet text-white border-transparent shadow-lg"
+              key={dayIdx}
+              onClick={() => setActiveDay(dayIdx)}
+              className={`relative px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap transition-all border ${
+                isActive
+                  ? "bg-gradient-to-r from-xan-crimson to-xan-violet text-white border-transparent shadow-[0_0_20px_rgba(233,69,96,0.3)]"
                   : "bg-xan-card text-muted-foreground hover:text-foreground hover:bg-xan-card-hover border-xan-border"
               }`}
             >
-              <span className="text-sm font-semibold">{day.label}</span>
-              <span
-                className={`text-[10px] mt-0.5 ${
-                  isSelected ? "text-white/70" : "text-muted-foreground/60"
-                }`}
-              >
-                {count} {count === 1 ? "ep" : "eps"}
-              </span>
-              {isToday && (
-                <span
-                  className={`w-1 h-1 rounded-full mt-1 ${
-                    isSelected ? "bg-white" : "bg-xan-crimson"
-                  }`}
-                />
-              )}
+              <div className="flex items-center gap-2">
+                <span>{DAY_LABELS[dayIdx]}</span>
+                {count > 0 && (
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                      isActive ? "bg-white/20 text-white" : "bg-white/5 text-muted-foreground"
+                    }`}
+                  >
+                    {count}
+                  </span>
+                )}
+                {isToday && (
+                  <span
+                    className={`text-[10px] px-1.5 py-0.5 rounded-full ${
+                      isActive
+                        ? "bg-white/20 text-white"
+                        : "bg-xan-crimson/20 text-xan-crimson border border-xan-crimson/40"
+                    }`}
+                  >
+                    TODAY
+                  </span>
+                )}
+              </div>
             </button>
           );
         })}
       </div>
 
-      {/* Episodes for selected day */}
-      <div className="space-y-3">
-        {todayEntries.length === 0 ? (
-          <div className="text-center py-12 rounded-xl border border-xan-border bg-xan-card/50">
-            <Calendar className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
-            <p className="text-foreground font-medium">No episodes airing</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              Check another day — anime schedules vary throughout the week.
-            </p>
-          </div>
-        ) : (
-          todayEntries.map((entry) => (
-            <ScheduleCard
-              key={entry.id}
-              anime={entry.media}
-              episode={entry.episode}
-              airingAt={entry.airingAt}
-            />
-          ))
-        )}
+      <div className="flex items-baseline justify-between">
+        <h2 className="text-xl md:text-2xl font-bold font-display text-foreground flex items-center gap-2">
+          <CalendarDays className="h-5 w-5 text-xan-crimson" />
+          {DAY_FULL[activeDay]}
+          {activeDay === today && (
+            <span className="text-xs font-normal text-muted-foreground ml-2">
+              (today)
+            </span>
+          )}
+        </h2>
+        <span className="text-xs text-muted-foreground inline-flex items-center gap-1">
+          <Clock className="h-3 w-3" />
+          {entries.length} airing{entries.length !== 1 ? "s" : ""}
+        </span>
       </div>
+
+      {entries.length > 0 ? (
+        <div className="space-y-2">
+          {entries.map((s) => (
+            <ScheduleCard key={`${s.id}-${s.episode}`} schedule={s} />
+          ))}
+        </div>
+      ) : (
+        <div className="rounded-xl border border-xan-border bg-xan-card/50 py-16 text-center">
+          <CalendarDays className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+          <p className="text-foreground font-medium">No airings scheduled</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            Nothing airing on {DAY_FULL[activeDay]} this week.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

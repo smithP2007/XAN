@@ -1,143 +1,146 @@
 "use client";
 
 // hooks/useRecommendations.ts
-// ✅ Client-side recommendation engine — analyzes watch history genres
-// and fetches AniList recommendations based on top genres.
-
-import { useState, useEffect, useCallback } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useWatchHistory } from "./useWatchHistory";
+import { fetchSearch } from "@/lib/anilist";
 import type { Anime } from "@/types/anime";
 
-interface UseRecommendationsResult {
+const CACHE_KEY_PREFIX = "xan-recs-v1";
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+interface RecommendationsResult {
   recommendations: Anime[];
-  isLoading: boolean;
   topGenres: string[];
+  isLoading: boolean;
+  error: string | null;
   refresh: () => void;
 }
 
-const CACHE_KEY = "xan-recommendations-cache";
-const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
-
-interface CachedRecommendations {
-  timestamp: number;
-  data: Anime[];
+interface CachedRecs {
+  ts: number;
+  recommendations: Anime[];
   topGenres: string[];
+  watchedSignature: string;
 }
 
-export function useRecommendations(): UseRecommendationsResult {
+function buildWatchedSignature(watchedIds: number[], topGenres: string[]): string {
+  return `${watchedIds.slice(0, 20).join(",")}|${topGenres.join(",")}`;
+}
+
+function readCache(key: string): CachedRecs | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CachedRecs;
+    if (!parsed || typeof parsed.ts !== "number") return null;
+    if (Date.now() - parsed.ts > CACHE_TTL_MS) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeCache(key: string, value: CachedRecs): void {
+  if (typeof window === "undefined") return;
+  try {
+    sessionStorage.setItem(key, JSON.stringify(value));
+  } catch {}
+}
+
+export function useRecommendations(): RecommendationsResult {
   const { history, isLoaded } = useWatchHistory();
   const [recommendations, setRecommendations] = useState<Anime[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [topGenres, setTopGenres] = useState<string[]>([]);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
-  const refresh = useCallback(() => {
-    // Clear cache
-    if (typeof window !== "undefined") {
-      sessionStorage.removeItem(CACHE_KEY);
+  const { topGenres, watchedIds, watchedSignature } = useMemo(() => {
+    const watchedIds = history.map((h) => h.animeId);
+    const genreCounts = new Map<string, number>();
+    for (const entry of history) {
+      const ageDays = (Date.now() - entry.updatedAt) / 86_400_000;
+      const recencyWeight = Math.max(0.1, 1 - ageDays / 30);
+      const genres = entry.genres ?? [];
+      for (const g of genres) {
+        genreCounts.set(g, (genreCounts.get(g) ?? 0) + recencyWeight);
+      }
     }
-    setRefreshKey((k) => k + 1);
-  }, []);
+    const sorted = [...genreCounts.entries()].sort((a, b) => b[1] - a[1]);
+    const topGenres = sorted.slice(0, 3).map(([g]) => g);
+    return {
+      topGenres,
+      watchedIds,
+      watchedSignature: buildWatchedSignature(watchedIds, topGenres),
+    };
+  }, [history]);
 
   useEffect(() => {
     if (!isLoaded) return;
-
-    // Need at least 3 history items for meaningful recommendations
-    if (history.length < 3) {
+    if (history.length < 3 || topGenres.length === 0) {
       setRecommendations([]);
-      setTopGenres([]);
+      setIsLoading(false);
       return;
     }
 
-    // Check cache first
-    if (typeof window !== "undefined" && refreshKey === 0) {
-      try {
-        const cached = sessionStorage.getItem(CACHE_KEY);
-        if (cached) {
-          const parsed: CachedRecommendations = JSON.parse(cached);
-          if (Date.now() - parsed.timestamp < CACHE_TTL) {
-            setRecommendations(parsed.data);
-            setTopGenres(parsed.topGenres);
-            return;
-          }
-        }
-      } catch {
-        // ignore
-      }
-    }
-
-    // Extract genre frequency from watch history
-    const genreCounts: Record<string, number> = {};
-    for (const entry of history) {
-      if (entry.genres && Array.isArray(entry.genres)) {
-        for (const genre of entry.genres) {
-          genreCounts[genre] = (genreCounts[genre] ?? 0) + 1;
-        }
-      }
-    }
-
-    // Sort genres by frequency
-    const sortedGenres = Object.entries(genreCounts)
-      .sort((a, b) => b[1] - a[1])
-      .map(([g]) => g);
-
-    if (sortedGenres.length === 0) {
-      setRecommendations([]);
-      setTopGenres([]);
+    const cacheKey = `${CACHE_KEY_PREFIX}:${watchedSignature}`;
+    const cached = readCache(cacheKey);
+    if (cached && refreshNonce === 0) {
+      setRecommendations(cached.recommendations);
+      setError(null);
+      setIsLoading(false);
       return;
     }
 
-    // Take top 2-3 genres
-    const top2 = sortedGenres.slice(0, 2);
-    setTopGenres(top2);
-
-    // Already-watched anime IDs (to exclude from recommendations)
-    const watchedIds = new Set(history.map((h) => h.animeId));
-
+    let cancelled = false;
     setIsLoading(true);
+    setError(null);
 
-    // Fetch recommendations by top genres
-    const params = new URLSearchParams({
-      page: "1",
-      perPage: "20",
-      sort: "SCORE_DESC",
-      genres: top2.join(","),
-    });
-
-    fetch(`/api/search?${params.toString()}`)
-      .then(async (res) => {
-        if (!res.ok) throw new Error("Failed to fetch recommendations");
-        const json = await res.json();
-        const allAnime: Anime[] = json?.data ?? [];
-
-        // Deduplicate against already-watched
-        const filtered = allAnime.filter((a) => !watchedIds.has(a.id));
-
-        // Take top 12
-        const result = filtered.slice(0, 12);
-
-        setRecommendations(result);
-
-        // Cache in sessionStorage
-        if (typeof window !== "undefined") {
-          const cache: CachedRecommendations = {
-            timestamp: Date.now(),
-            data: result,
-            topGenres: top2,
-          };
-          try {
-            sessionStorage.setItem(CACHE_KEY, JSON.stringify(cache));
-          } catch {
-            // ignore
-          }
+    const queryGenres = topGenres.slice(0, 2);
+    fetchSearch("", 1, 24, queryGenres, "SCORE_DESC")
+      .then((result) => {
+        if (cancelled) return;
+        if (!result) {
+          setError("Failed to load recommendations");
+          setRecommendations([]);
+          setIsLoading(false);
+          return;
         }
+        const watchedSet = new Set(watchedIds);
+        const seen = new Set<number>();
+        const filtered = result.data.filter((a) => {
+          if (watchedSet.has(a.id)) return false;
+          if (seen.has(a.id)) return false;
+          seen.add(a.id);
+          return true;
+        });
+        const finalRecs = filtered.slice(0, 12);
+        setRecommendations(finalRecs);
+        writeCache(cacheKey, {
+          ts: Date.now(),
+          recommendations: finalRecs,
+          topGenres,
+          watchedSignature,
+        });
+        setIsLoading(false);
       })
       .catch((err) => {
-        console.error("[useRecommendations] Failed:", err);
+        if (cancelled) return;
+        console.error("[useRecommendations] fetch failed:", err);
+        setError("Failed to load recommendations");
         setRecommendations([]);
-      })
-      .finally(() => setIsLoading(false));
-  }, [history, isLoaded, refreshKey]);
+        setIsLoading(false);
+      });
 
-  return { recommendations, isLoading, topGenres, refresh };
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoaded, history.length, watchedSignature, refreshNonce]);
+
+  const refresh = () => {
+    setRefreshNonce((n) => n + 1);
+  };
+
+  return { recommendations, topGenres, isLoading, error, refresh };
 }

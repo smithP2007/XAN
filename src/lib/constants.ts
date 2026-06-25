@@ -1,6 +1,10 @@
 // lib/constants.ts
 // XAN shared constants
 
+// ✅ Bug #8 fix: GENRES now contains only actual AniList genres.
+// Shounen / Seinen / Isekai / School / Josei / Shoujo are AniList **tags**, not
+// genres — querying them via `genre_in` silently returns 0 results. They live
+// in the new TAGS array below and are routed through `tag_in` instead.
 export const GENRES = [
   "Action",
   "Adventure",
@@ -20,8 +24,6 @@ export const GENRES = [
   "Music",
 ] as const;
 
-// Tags are AniList "tags" (demographics/themes), not genres.
-// They must be queried via `tag_in` (not `genre_in`) or AniList returns 0 results.
 export const TAGS = [
   { label: "Shounen", value: "Shounen" },
   { label: "Seinen", value: "Seinen" },
@@ -31,15 +33,10 @@ export const TAGS = [
   { label: "School Life", value: "School Life" },
 ] as const;
 
-// Combined list for UI dropdowns — marks which ones are tags vs genres
-export const ALL_CATEGORIES: { label: string; value: string; isTag: boolean }[] = [
-  ...GENRES.map((g) => ({ label: g, value: g, isTag: false })),
-  ...TAGS.map((t) => ({ label: t.label, value: t.value, isTag: true })),
-];
+export const TAG_VALUES = new Set<string>(TAGS.map((t) => t.value));
 
-// Check if a category name is a tag (not a genre)
 export function isTag(value: string): boolean {
-  return TAGS.some((t) => t.value === value || t.label === value);
+  return TAG_VALUES.has(value);
 }
 
 export const SORT_OPTIONS = [
@@ -90,11 +87,9 @@ export const SITE = {
 export const NAV_LINKS = [
   { label: "Home", href: "/home" },
   { label: "Trending", href: "/trending" },
-  { label: "Search", href: "/search" },
   { label: "History", href: "/history" },
 ] as const;
 
-// ✅ tiny base64 placeholder for missing cover images (Bug #23)
 export const PLACEHOLDER_BLUR =
   "data:image/svg+xml;base64," +
   Buffer.from(

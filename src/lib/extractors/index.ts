@@ -1,9 +1,4 @@
 // lib/extractors/index.ts
-// Barrel export for all stream extractors.
-
-export {
-  extractMegacloud,
-  isMegacloudUrl,
-  type ExtractedStream,
-} from "./megacloud";
-export { extractVixcloud, isVixcloudUrl } from "./vixcloud";
+export { extractMegacloud } from "./megacloud";
+export type { ExtractedSource } from "./megacloud";
+export { extractVixcloud } from "./vixcloud";

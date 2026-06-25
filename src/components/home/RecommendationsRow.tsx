@@ -1,82 +1,70 @@
 "use client";
 
 // components/home/RecommendationsRow.tsx
-// ✅ "Recommended For You" section — analyzes watch history genres.
-
-import { Sparkles, RefreshCw } from "lucide-react";
 import { motion } from "motion/react";
+import { Sparkles, RefreshCw } from "lucide-react";
+import { useRecommendations } from "@/hooks/useRecommendations";
 import { AnimeCard } from "@/components/cards/AnimeCard";
 import { AnimeCardSkeleton } from "@/components/cards/AnimeCardSkeleton";
-import { useRecommendations } from "@/hooks/useRecommendations";
 import { Button } from "@/components/ui/button";
 
 export function RecommendationsRow() {
-  const { recommendations, isLoading, topGenres, refresh } = useRecommendations();
+  const { recommendations, topGenres, isLoading, refresh } = useRecommendations();
 
-  // Don't render if user has less than 3 history items (not enough data)
-  if (recommendations.length === 0 && !isLoading) {
-    return null;
-  }
+  if (topGenres.length === 0) return null;
 
-  const genreLabel = topGenres.length > 0 ? topGenres.join(" & ") : "your history";
+  const subtitle =
+    topGenres.length > 0
+      ? `Because you like ${topGenres.slice(0, 2).join(" & ")}`
+      : "Based on your watch history";
 
   return (
-    <section className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500 to-pink-600 flex items-center justify-center">
-            <Sparkles className="h-4 w-4 text-white" />
-          </div>
-          <div>
-            <h2 className="text-xl md:text-2xl font-bold font-display text-foreground">
-              Recommended For You
-            </h2>
-            <p className="text-xs text-muted-foreground">
-              Because you like <span className="text-foreground">{genreLabel}</span>
-            </p>
-          </div>
+    <motion.section
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+      className="space-y-4"
+    >
+      <div className="flex items-baseline justify-between">
+        <div>
+          <h2 className="text-xl md:text-2xl font-bold font-display text-foreground flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-xan-violet" />
+            Recommended For You
+          </h2>
+          <p className="text-xs text-muted-foreground">{subtitle}</p>
         </div>
-
         <Button
           variant="ghost"
           size="sm"
           onClick={refresh}
-          className="text-muted-foreground hover:text-foreground"
-          aria-label="Refresh recommendations"
+          disabled={isLoading}
+          className="text-xs text-muted-foreground hover:text-foreground"
         >
-          <RefreshCw className="h-4 w-4" />
+          <RefreshCw className={`h-3 w-3 mr-1 ${isLoading ? "animate-spin" : ""}`} />
+          Refresh
         </Button>
       </div>
 
       {isLoading ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
-          {Array.from({ length: 12 }, (_, i) => (
+          {Array.from({ length: 6 }, (_, i) => (
             <AnimeCardSkeleton key={i} />
           ))}
         </div>
-      ) : (
-        <div className="flex gap-4 overflow-x-auto no-scrollbar snap-x snap-mandatory -mx-4 px-4 pb-2">
+      ) : recommendations.length > 0 ? (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
           {recommendations.map((item, idx) => (
-            <div
-              key={item.id}
-              className="flex-shrink-0 w-[150px] sm:w-[160px] md:w-[180px] snap-start"
-            >
-              <motion.div
-                initial={{ opacity: 0, y: 16 }}
-                whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true, margin: "-50px" }}
-                transition={{
-                  duration: 0.4,
-                  delay: Math.min(idx * 0.03, 0.3),
-                  ease: [0.25, 0.4, 0.25, 1],
-                }}
-              >
-                <AnimeCard anime={item} index={idx} />
-              </motion.div>
-            </div>
+            <AnimeCard key={item.id} anime={item} index={idx} />
           ))}
         </div>
+      ) : (
+        <div className="rounded-xl border border-xan-border bg-xan-card/50 py-10 text-center">
+          <Sparkles className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
+          <p className="text-sm text-muted-foreground">
+            Watch more anime to get better recommendations.
+          </p>
+        </div>
       )}
-    </section>
+    </motion.section>
   );
 }

@@ -91,7 +91,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     refreshStatus();
-    setUserAgent(navigator.userAgent);
+    setUserAgent(typeof navigator !== "undefined" ? navigator.userAgent : "");
   }, [refreshStatus]);
 
   const handleSave = async () => {

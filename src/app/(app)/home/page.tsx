@@ -6,8 +6,8 @@ import { fetchTrending, fetchPopular } from "@/lib/anilist";
 import { TrendingCarousel } from "@/components/home/TrendingCarousel";
 import { PopularGrid } from "@/components/home/PopularGrid";
 import { ContinueWatching } from "@/components/home/ContinueWatching";
-import { CategoryTabs } from "@/components/home/CategoryTabs";
 import { RecommendationsRow } from "@/components/home/RecommendationsRow";
+import { CategoryTabs } from "@/components/home/CategoryTabs";
 import { AnimeCardSkeleton } from "@/components/cards/AnimeCardSkeleton";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
@@ -20,7 +20,9 @@ export default function HomePage() {
       <ContinueWatching />
 
       {/* Recommended For You (client — analyzes watch history) */}
-      <RecommendationsRow />
+      <ErrorBoundary message="Couldn't load recommendations">
+        <RecommendationsRow />
+      </ErrorBoundary>
 
       {/* Trending */}
       <ErrorBoundary message="Couldn't load trending">

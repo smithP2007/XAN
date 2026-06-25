@@ -25,6 +25,13 @@ const nextConfig: NextConfig = {
     ignoreBuildErrors: false,
   },
   reactStrictMode: false,
+  // ✅ Allow the space-z.ai preview proxy to access /_next/* resources.
+  allowedDevOrigins: [
+    "https://preview-chat-5618a28f-85d9-4fd1-9aa3-ab519e6c4c69.space-z.ai",
+    "http://preview-chat-5618a28f-85d9-4fd1-9aa3-ab519e6c4c69.space-z.ai",
+    "https://preview-5618a28f-85d9-4fd1-9aa3-ab519e6c4c69.space-z.ai",
+    "http://preview-5618a28f-85d9-4fd1-9aa3-ab519e6c4c69.space-z.ai",
+  ],
 };
 
 export default nextConfig;

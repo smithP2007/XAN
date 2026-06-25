@@ -1,8 +1,6 @@
 "use client";
 
 // components/anime/EpisodeGrid.tsx
-// ✅ "use client" — selection state
-
 import Link from "next/link";
 import { useState } from "react";
 import { Play, Search } from "lucide-react";
@@ -15,13 +13,16 @@ interface EpisodeGridProps {
   episodeCount: number | null;
 }
 
+const MAX_RENDERED = 200;
+
 export function EpisodeGrid({ animeId, episodeCount }: EpisodeGridProps) {
   const [query, setQuery] = useState("");
 
-  // Bug 13 fix: if episodeCount is 0, show empty state instead of defaulting to 12
-  // Bug 14 fix: cap at 200 episodes to prevent rendering huge DOM
-  const total = episodeCount == null ? 12 : Math.min(episodeCount, 200);
-  const episodes = Array.from({ length: total }, (_, i) => i + 1);
+  const isUnknown = episodeCount == null;
+  const total = isUnknown ? 12 : episodeCount;
+  const cappedTotal = Math.min(total, MAX_RENDERED);
+  const isCapped = total > MAX_RENDERED;
+  const episodes = Array.from({ length: cappedTotal }, (_, i) => i + 1);
 
   const filtered = query
     ? episodes.filter((n) => String(n).includes(query.trim()))
@@ -30,9 +31,7 @@ export function EpisodeGrid({ animeId, episodeCount }: EpisodeGridProps) {
   return (
     <section className="space-y-3">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold font-display text-foreground">
-          Episodes
-        </h2>
+        <h2 className="text-lg font-semibold font-display text-foreground">Episodes</h2>
         <div className="relative w-32 sm:w-40">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
           <Input
@@ -45,16 +44,19 @@ export function EpisodeGrid({ animeId, episodeCount }: EpisodeGridProps) {
         </div>
       </div>
 
-      {episodeCount == null && (
+      {isUnknown && (
         <p className="text-xs text-muted-foreground italic">
           Episode count unknown — showing first 12 by default.
         </p>
       )}
-
-      {/* Bug 14 fix: show note when capping large episode lists */}
-      {episodeCount != null && episodeCount > 200 && (
+      {!isUnknown && episodeCount === 0 && (
         <p className="text-xs text-muted-foreground italic">
-          Showing first 200 of {episodeCount} episodes. Use search to find specific episodes.
+          No episodes available for this anime yet.
+        </p>
+      )}
+      {isCapped && (
+        <p className="text-xs text-muted-foreground italic">
+          Showing first {MAX_RENDERED} of {total} episodes. Use search to find specific episodes.
         </p>
       )}
 

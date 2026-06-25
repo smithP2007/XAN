@@ -1,71 +1,141 @@
 "use client";
 
 // components/watch/SimilarAnime.tsx
-// ✅ "You might also like" section on the watch page.
-// Uses AniList recommendations data from the anime detail schema.
-
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { Sparkles } from "lucide-react";
-import type { Recommendation } from "@/types/anime";
+import { motion } from "motion/react";
+import { Sparkles, AlertCircle } from "lucide-react";
+import { fetchSearch } from "@/lib/anilist";
+import { type Recommendation, type Anime } from "@/types/anime";
+
+function getRecTitle(title: { romaji: string | null; english: string | null }): string {
+  return title.english ?? title.romaji ?? "Untitled";
+}
 
 interface SimilarAnimeProps {
   recommendations: Recommendation[];
-  currentTitle: string;
+  currentAnimeId: number;
+  fallbackGenres: string[];
 }
 
-export function SimilarAnime({ recommendations, currentTitle }: SimilarAnimeProps) {
-  // Filter out nulls and take top 8
-  const valid = recommendations
-    .map((r) => r.mediaRecommendation)
-    .filter((r): r is NonNullable<typeof r> => r !== null)
-    .slice(0, 8);
+interface SimItem {
+  id: number;
+  title: string;
+  cover: string;
+  score: number | null;
+}
 
-  if (valid.length === 0) return null;
+export function SimilarAnime({
+  recommendations,
+  currentAnimeId,
+  fallbackGenres,
+}: SimilarAnimeProps) {
+  const [fallback, setFallback] = useState<Anime[]>([]);
+  const [loadingFallback, setLoadingFallback] = useState(false);
+
+  const recs: SimItem[] = recommendations
+    .map((r) => r.mediaRecommendation)
+    .filter((m): m is NonNullable<typeof m> => m !== null && m.id !== currentAnimeId)
+    .slice(0, 8)
+    .map((m) => ({
+      id: m.id,
+      title: getRecTitle(m.title),
+      cover: m.coverImage.large,
+      score: m.averageScore,
+    }));
+
+  useEffect(() => {
+    if (recs.length > 0) return;
+    if (fallbackGenres.length === 0) return;
+
+    let cancelled = false;
+    setLoadingFallback(true);
+
+    const genre = fallbackGenres[0];
+    fetchSearch("", 1, 12, [genre], "POPULARITY_DESC")
+      .then((result) => {
+        if (cancelled || !result) {
+          if (!cancelled) setFallback([]);
+          return;
+        }
+        const filtered = result.data.filter((a) => a.id !== currentAnimeId).slice(0, 8);
+        setFallback(filtered);
+      })
+      .catch(() => {
+        if (!cancelled) setFallback([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingFallback(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentAnimeId, fallbackGenres.join(","), recs.length]);
+
+  const hasContent = recs.length > 0 || fallback.length > 0;
+  if (!hasContent && !loadingFallback) return null;
+
+  const items: SimItem[] =
+    recs.length > 0
+      ? recs
+      : fallback.map((a) => ({
+          id: a.id,
+          title: a.title.english ?? a.title.romaji ?? "Untitled",
+          cover: a.coverImage?.large ?? "/placeholder-card.png",
+          score: a.averageScore,
+        }));
 
   return (
-    <section className="space-y-3">
-      <div className="flex items-center gap-2">
-        <Sparkles className="h-4 w-4 text-purple-500" />
-        <h2 className="text-lg font-semibold font-display text-foreground">
-          You might also like
-        </h2>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Based on viewers who watched {currentTitle}
-      </p>
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+      className="rounded-lg border border-xan-border bg-xan-card/50 p-4"
+    >
+      <h2 className="text-sm font-semibold text-foreground mb-3 flex items-center gap-2">
+        <Sparkles className="h-4 w-4 text-xan-violet" />
+        You might also like
+      </h2>
 
-      <div className="flex gap-4 overflow-x-auto no-scrollbar snap-x snap-mandatory -mx-4 px-4 pb-2">
-        {valid.map((rec) => {
-          const title = rec.title.english ?? rec.title.romaji ?? "Untitled";
-          const image = rec.coverImage.large || "/placeholder-card.png";
-          return (
-            <Link
-              key={rec.id}
-              href={`/anime/${rec.id}`}
-              className="group space-y-2 flex-shrink-0 w-[140px] snap-start"
-            >
-              <div className="relative aspect-[2/3] rounded-lg overflow-hidden border border-xan-border group-hover:border-xan-crimson/40 transition-colors">
+      {loadingFallback && items.length === 0 ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {Array.from({ length: 4 }, (_, i) => (
+            <div key={i} className="aspect-[3/4] rounded-md bg-xan-card animate-pulse" />
+          ))}
+        </div>
+      ) : items.length > 0 ? (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {items.map((item) => (
+            <Link key={item.id} href={`/anime/${item.id}`} className="group space-y-1.5">
+              <div className="relative aspect-[3/4] rounded-md overflow-hidden bg-zinc-900 border border-xan-border group-hover:border-xan-crimson/40 transition-colors">
                 <Image
-                  src={image}
-                  alt={title}
+                  src={item.cover}
+                  alt={item.title}
                   fill
-                  sizes="(max-width: 768px) 140px, 180px"
-                  className="object-cover transition-transform group-hover:scale-105"
+                  sizes="(max-width: 640px) 50vw, 200px"
+                  className="object-cover group-hover:scale-105 transition-transform"
+                  unoptimized
                 />
               </div>
-              <p className="text-xs font-medium text-foreground line-clamp-2 group-hover:text-xan-crimson transition-colors">
-                {title}
+              <p className="text-xs font-medium text-foreground truncate group-hover:text-xan-crimson transition-colors">
+                {item.title}
               </p>
-              {rec.averageScore != null && (
+              {item.score != null && (
                 <p className="text-[10px] text-muted-foreground">
-                  Score: {rec.averageScore}%
+                  ★ {(item.score / 10).toFixed(1)}/10
                 </p>
               )}
             </Link>
-          );
-        })}
-      </div>
-    </section>
+          ))}
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 text-xs text-muted-foreground py-4">
+          <AlertCircle className="h-4 w-4" />
+          No similar anime found.
+        </div>
+      )}
+    </motion.div>
   );
 }

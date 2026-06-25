@@ -1,85 +1,82 @@
 // app/(app)/schedule/page.tsx
-// ✅ Anime Schedule / Airing Calendar — server component
-
-import { fetchAiringSchedule, type AiringScheduleEntry } from "@/lib/anilist";
+import { fetchAiringSchedule } from "@/lib/anilist";
 import { ScheduleView } from "@/components/schedule/ScheduleView";
-import { ErrorCard } from "@/components/ErrorCard";
-import { Calendar } from "lucide-react";
+import { CalendarDays, AlertCircle } from "lucide-react";
+import type { AiringSchedule } from "@/types/anime";
 
-export const revalidate = 1800; // 30 min ISR
+export const dynamic = "force-dynamic";
 
-// Get current week boundaries (Mon 00:00 → Sun 23:59 UTC)
-function getWeekBoundaries(): { start: number; end: number } {
+function getCurrentWeekRange(): [number, number] {
   const now = new Date();
-  const day = now.getUTCDay(); // 0=Sun, 1=Mon, ...
-  const mondayOffset = day === 0 ? -6 : 1 - day;
+  const day = now.getUTCDay();
+  const daysSinceMonday = (day + 6) % 7;
 
   const monday = new Date(now);
-  monday.setUTCDate(now.getUTCDate() + mondayOffset);
+  monday.setUTCDate(now.getUTCDate() - daysSinceMonday);
   monday.setUTCHours(0, 0, 0, 0);
 
-  const sunday = new Date(monday);
-  sunday.setUTCDate(monday.getUTCDate() + 6);
-  sunday.setUTCHours(23, 59, 59, 999);
+  const nextMonday = new Date(monday);
+  nextMonday.setUTCDate(monday.getUTCDate() + 7);
 
-  return {
-    start: Math.floor(monday.getTime() / 1000),
-    end: Math.floor(sunday.getTime() / 1000),
-  };
+  return [Math.floor(monday.getTime() / 1000), Math.floor(nextMonday.getTime() / 1000)];
 }
 
 export default async function SchedulePage() {
-  const { start, end } = getWeekBoundaries();
+  const [start, end] = getCurrentWeekRange();
 
-  // Fetch all airing schedules for the week (paginate if needed)
-  let allEntries: AiringScheduleEntry[] = [];
-  let page = 1;
-  let hasNext = true;
+  const [page1, page2] = await Promise.all([
+    fetchAiringSchedule(start, end, 1, 50).catch(() => null),
+    fetchAiringSchedule(start, end, 2, 50).catch(() => null),
+  ]);
 
-  while (hasNext && page <= 3) {
-    const result = await fetchAiringSchedule(start, end, page, 50);
-    if (!result) break;
-    allEntries = [...allEntries, ...result.data];
-    hasNext = result.hasNextPage;
-    page++;
+  const allSchedules: AiringSchedule[] = [
+    ...(page1?.data ?? []),
+    ...(page2?.data ?? []),
+  ];
+
+  const byDay: Record<number, AiringSchedule[]> = {
+    0: [], 1: [], 2: [], 3: [], 4: [], 5: [], 6: [],
+  };
+
+  for (const s of allSchedules) {
+    if (!s.media) continue;
+    const dayIdx = new Date(s.airingAt * 1000).getUTCDay();
+    byDay[dayIdx].push(s);
   }
 
-  // Deduplicate by schedule ID (AniList can return duplicates across pages)
-  const seen = new Set<number>();
-  const deduped = allEntries.filter((e) => {
-    if (seen.has(e.id)) return false;
-    seen.add(e.id);
-    return true;
-  });
+  for (const dayIdx of Object.keys(byDay)) {
+    byDay[Number(dayIdx)].sort((a, b) => a.airingAt - b.airingAt);
+  }
 
-  // Week label
-  const weekStart = new Date(start * 1000).toLocaleDateString([], {
-    month: "short",
-    day: "numeric",
-  });
-  const weekEnd = new Date(end * 1000).toLocaleDateString([], {
-    month: "short",
-    day: "numeric",
-  });
+  const total = allSchedules.length;
+  const fetchFailed = !page1 && !page2;
 
   return (
     <div className="max-w-5xl mx-auto px-4 md:px-6 py-8 space-y-6">
-      {/* Header */}
       <div className="space-y-1">
         <h1 className="text-2xl md:text-3xl font-display font-bold text-foreground flex items-center gap-2">
-          <Calendar className="h-6 w-6 text-xan-crimson" />
-          Airing Schedule
+          <CalendarDays className="h-6 w-6 text-xan-crimson" />
+          Schedule
         </h1>
         <p className="text-sm text-muted-foreground">
-          {deduped.length} episodes airing this week ({weekStart} – {weekEnd})
+          Airing times in your local timezone. {total} episode{total !== 1 ? "s" : ""} scheduled this week.
         </p>
       </div>
 
-      {/* Schedule */}
-      {deduped.length === 0 ? (
-        <ErrorCard message="No airing anime found for this week" />
+      {fetchFailed || total === 0 ? (
+        <div className="rounded-xl border border-xan-border bg-xan-card/50 py-16 text-center">
+          <AlertCircle className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+          <p className="text-foreground font-medium">
+            {fetchFailed ? "Couldn't load schedule" : "No schedule available"}
+          </p>
+          <p className="text-sm text-muted-foreground mt-1">
+            {fetchFailed
+              ? "AniList API may be rate-limited or unreachable. Try again in a moment."
+              : "Nothing airing this week — check back soon."}
+          </p>
+        </div>
       ) : (
-        <ScheduleView schedule={deduped} />
+        <ScheduleView byDay={byDay} />
       )}
     </div>
   );

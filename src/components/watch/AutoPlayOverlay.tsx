@@ -1,115 +1,110 @@
 "use client";
 
 // components/watch/AutoPlayOverlay.tsx
-// ✅ Overlay that appears when an episode nears completion.
-// Shows a countdown to the next episode with Play Now / Cancel buttons.
-
-import { useState, useEffect } from "react";
-import { Play, X, SkipForward } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { useEffect, useState, useCallback, useRef } from "react";
+import { Play, X } from "lucide-react";
 
 interface AutoPlayOverlayProps {
-  open: boolean;
-  nextEpisode: number | null;
+  nextEpisodeLabel: string;
   animeTitle: string;
-  onPlayNow: () => void;
+  onPlayNext: () => void;
   onCancel: () => void;
 }
 
+const COUNTDOWN_SECONDS = 10;
+
 export function AutoPlayOverlay({
-  open,
-  nextEpisode,
+  nextEpisodeLabel,
   animeTitle,
-  onPlayNow,
+  onPlayNext,
   onCancel,
 }: AutoPlayOverlayProps) {
-  const [countdown, setCountdown] = useState(10);
+  const [remaining, setRemaining] = useState(COUNTDOWN_SECONDS);
+  const firedRef = useRef(false);
+
+  const handleCancel = useCallback(() => {
+    if (firedRef.current) return;
+    firedRef.current = true;
+    setRemaining(COUNTDOWN_SECONDS);
+    onCancel();
+  }, [onCancel]);
+
+  const handlePlayNow = useCallback(() => {
+    if (firedRef.current) return;
+    firedRef.current = true;
+    setRemaining(COUNTDOWN_SECONDS);
+    onPlayNext();
+  }, [onPlayNext]);
 
   useEffect(() => {
-    if (!open) {
-      setCountdown(10);
+    if (remaining <= 0) {
+      if (!firedRef.current) {
+        firedRef.current = true;
+        onPlayNext();
+      }
       return;
     }
+    const id = setTimeout(() => setRemaining((r) => r - 1), 1000);
+    return () => clearTimeout(id);
+  }, [remaining, onPlayNext]);
 
-    const interval = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(interval);
-          onPlayNow();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, [open, onPlayNow]);
-
-  if (!open || nextEpisode === null) return null;
-
-  // Circular progress
+  const fraction = remaining / COUNTDOWN_SECONDS;
   const radius = 28;
   const circumference = 2 * Math.PI * radius;
-  const progress = ((10 - countdown) / 10) * circumference;
+  const dashOffset = circumference * (1 - fraction);
 
   return (
-    <div className="absolute inset-0 flex items-center justify-center bg-black/80 backdrop-blur-sm z-50">
-      <div className="text-center space-y-4 px-6">
-        {/* Circular countdown */}
-        <div className="relative w-20 h-20 mx-auto">
-          <svg className="w-20 h-20 -rotate-90" viewBox="0 0 64 64">
-            <circle
-              cx="32"
-              cy="32"
-              r={radius}
-              fill="none"
-              stroke="rgba(255,255,255,0.15)"
-              strokeWidth="3"
-            />
-            <circle
-              cx="32"
-              cy="32"
-              r={radius}
-              fill="none"
-              stroke="#e94560"
-              strokeWidth="3"
-              strokeDasharray={circumference}
-              strokeDashoffset={progress}
-              strokeLinecap="round"
-              className="transition-all duration-1000 ease-linear"
-            />
-          </svg>
-          <div className="absolute inset-0 flex items-center justify-center">
-            <span className="text-2xl font-bold text-white">{countdown}</span>
+    <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/85 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="relative max-w-md w-full mx-4 rounded-xl border border-xan-border bg-xan-card/95 p-6 text-center shadow-2xl">
+        <button
+          onClick={handleCancel}
+          aria-label="Cancel autoplay"
+          className="absolute top-3 right-3 p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-white/5 transition-colors"
+        >
+          <X className="h-4 w-4" />
+        </button>
+
+        <div className="flex justify-center mb-4">
+          <div className="relative w-20 h-20">
+            <svg className="w-20 h-20 -rotate-90" viewBox="0 0 64 64">
+              <circle cx="32" cy="32" r={radius} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="4" />
+              <circle
+                cx="32"
+                cy="32"
+                r={radius}
+                fill="none"
+                stroke="#e94560"
+                strokeWidth="4"
+                strokeLinecap="round"
+                strokeDasharray={circumference}
+                strokeDashoffset={dashOffset}
+                style={{ transition: "stroke-dashoffset 1s linear" }}
+              />
+            </svg>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="text-2xl font-bold text-white font-mono">{remaining}</span>
+            </div>
           </div>
         </div>
 
-        <div className="space-y-1">
-          <p className="text-white/80 text-sm">Next episode starting…</p>
-          <p className="text-white font-semibold text-lg">
-            Episode {nextEpisode}
-          </p>
-          <p className="text-white/50 text-xs line-clamp-1">{animeTitle}</p>
-        </div>
+        <p className="text-xs uppercase tracking-wider text-muted-foreground mb-1">Up Next</p>
+        <h3 className="text-base font-bold text-foreground truncate">{animeTitle}</h3>
+        <p className="text-sm text-muted-foreground mb-5">{nextEpisodeLabel}</p>
 
-        <div className="flex items-center gap-3 justify-center pt-2">
-          <Button
-            onClick={onCancel}
-            variant="secondary"
-            size="sm"
-            className="bg-white/10 text-white hover:bg-white/20 border-white/20"
+        <div className="flex gap-2 justify-center">
+          <button
+            onClick={handlePlayNow}
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-gradient-to-r from-xan-crimson to-xan-violet text-white text-sm font-medium hover:opacity-90 transition-opacity shadow-[0_0_20px_rgba(233,69,96,0.3)]"
           >
-            <X className="h-4 w-4 mr-1.5" />
-            Cancel
-          </Button>
-          <Button
-            onClick={onPlayNow}
-            size="sm"
-            className="bg-gradient-to-r from-xan-crimson to-xan-violet hover:opacity-90 text-white border-0"
-          >
-            <SkipForward className="h-4 w-4 mr-1.5 fill-white" />
+            <Play className="h-4 w-4 fill-white" />
             Play Now
-          </Button>
+          </button>
+          <button
+            onClick={handleCancel}
+            className="inline-flex items-center px-4 py-2 rounded-lg bg-xan-card text-muted-foreground text-sm font-medium hover:text-foreground hover:bg-xan-card-hover border border-xan-border transition-colors"
+          >
+            Cancel
+          </button>
         </div>
       </div>
     </div>

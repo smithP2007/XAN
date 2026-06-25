@@ -1,13 +1,9 @@
 "use client";
 
 // app/(app)/watch/[id]/page.tsx
-// ✅ "use client" — player, localStorage, useSearchParams
-// ✅ Backend mode is MANDATORY — VideoPlayer fetches stream from backend
-
-import { use, useEffect, useState, useCallback, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { use, useEffect, useState, useCallback, useMemo, Suspense } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import Link from "next/link";
-import Image from "next/image";
 import { fetchAnimeDetail } from "@/lib/anilist";
 import {
   getTitle,
@@ -19,19 +15,13 @@ import {
 import { VideoPlayer } from "@/components/watch/VideoPlayer";
 import { EpisodePanel } from "@/components/watch/EpisodePanel";
 import { VerificationBadge } from "@/components/watch/VerificationBadge";
+import { AutoPlayOverlay } from "@/components/watch/AutoPlayOverlay";
 import { SimilarAnime } from "@/components/watch/SimilarAnime";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useWatchHistory } from "@/hooks/useWatchHistory";
-import {
-  ArrowLeft,
-  Star,
-  Clock,
-  Calendar,
-  Tv,
-  Info,
-} from "lucide-react";
+import { ArrowLeft, Star, Clock, Calendar, Tv, Info } from "lucide-react";
 
 interface PageProps {
   params: Promise<{ id: string }>;
@@ -39,7 +29,15 @@ interface PageProps {
 
 export default function WatchPage({ params }: PageProps) {
   return (
-    <Suspense fallback={<div className="max-w-7xl mx-auto px-4 md:px-6 py-6 space-y-4"><div className="w-full aspect-video rounded-lg bg-xan-card animate-shimmer" /></div>}>
+    <Suspense
+      fallback={
+        <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 space-y-4">
+          <Skeleton className="w-full aspect-video rounded-lg bg-xan-card" />
+          <Skeleton className="h-8 w-2/3 bg-xan-card" />
+          <Skeleton className="h-4 w-1/2 bg-xan-card" />
+        </div>
+      }
+    >
       <WatchPageInner params={params} />
     </Suspense>
   );
@@ -49,15 +47,28 @@ function WatchPageInner({ params }: PageProps) {
   const { id } = use(params);
   const animeId = parseInt(id, 10);
   const searchParams = useSearchParams();
+  const router = useRouter();
   const episodeParam = searchParams.get("ep");
   const currentEpisode = episodeParam ? parseInt(episodeParam, 10) : 1;
 
   const [anime, setAnime] = useState<AnimeDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-  const { addEntry, history: watchHistory } = useWatchHistory();
+  const [showAutoPlay, setShowAutoPlay] = useState(false);
+  const { history, addEntry } = useWatchHistory();
 
-  // Fetch anime detail client-side (since page is "use client")
+  const savedEntry = useMemo(
+    () =>
+      history.find(
+        (e) => e.animeId === animeId && e.episodeNumber === currentEpisode,
+      ),
+    [history, animeId, currentEpisode],
+  );
+
+  const autoResumeTime = savedEntry?.timestamp && savedEntry.timestamp > 5
+    ? savedEntry.timestamp
+    : undefined;
+
   useEffect(() => {
     if (isNaN(animeId)) {
       setError(true);
@@ -90,7 +101,6 @@ function WatchPageInner({ params }: PageProps) {
     };
   }, [animeId]);
 
-  // Save progress to history when current episode changes / when player reports progress
   const handleProgress = useCallback(
     (timestamp: number, duration: number) => {
       if (!anime) return;
@@ -102,14 +112,29 @@ function WatchPageInner({ params }: PageProps) {
         duration: duration > 0 ? duration : 24 * 60,
         title: getTitle(anime.title),
         coverImage: anime.coverImage?.large ?? "/placeholder-card.png",
+        genres: anime.genres ?? [],
         updatedAt: Date.now(),
-        genres: anime.genres,
       });
     },
     [anime, currentEpisode, addEntry],
   );
 
-  // Initial history entry (so it shows up even before player reports progress)
+  const handleEpisodeEnd = useCallback(() => {
+    setShowAutoPlay(true);
+  }, []);
+
+  const handlePlayNext = useCallback(() => {
+    if (!anime) return;
+    const total = anime.episodes ?? 12;
+    const nextEp = currentEpisode < total ? currentEpisode + 1 : null;
+    if (nextEp) {
+      setShowAutoPlay(false);
+      router.push(`/watch/${anime.id}?ep=${nextEp}`);
+    } else {
+      setShowAutoPlay(false);
+    }
+  }, [anime, currentEpisode, router]);
+
   useEffect(() => {
     if (!anime) return;
     addEntry({
@@ -120,31 +145,10 @@ function WatchPageInner({ params }: PageProps) {
       duration: 24 * 60,
       title: getTitle(anime.title),
       coverImage: anime.coverImage?.large ?? "/placeholder-card.png",
+      genres: anime.genres ?? [],
       updatedAt: Date.now(),
-      genres: anime.genres,
     });
-    // Deps intentionally limited — addEntry identity changes per render, but
-    // we only want to record history on anime/episode change.
   }, [anime, currentEpisode, addEntry]);
-
-  // Navigate to next episode (defined before early returns to respect hook order)
-  const handlePlayNext = useCallback(() => {
-    if (anime) {
-      const total = anime.episodes ?? 12;
-      const nextEp = currentEpisode < total ? currentEpisode + 1 : null;
-      if (nextEp) {
-        window.location.href = `/watch/${anime.id}?ep=${nextEp}`;
-      }
-    }
-  }, [anime, currentEpisode]);
-
-  // Find saved history entry for resume position
-  const historyEntry = anime
-    ? watchHistory.find(
-        (h) => h.animeId === anime.id && h.episodeNumber === currentEpisode,
-      )
-    : undefined;
-  const autoResumeTime = historyEntry?.timestamp ?? undefined;
 
   if (loading) {
     return (
@@ -170,18 +174,13 @@ function WatchPageInner({ params }: PageProps) {
 
   const title = getTitle(anime.title);
   const description = sanitizeDescription(anime.description);
-
-  // Episode navigation
   const total = anime.episodes ?? 12;
   const prevEp = currentEpisode > 1 ? currentEpisode - 1 : null;
   const nextEp = currentEpisode < total ? currentEpisode + 1 : null;
-
-  // Use banner image as poster for the player
   const posterUrl = anime.bannerImage || anime.coverImage?.large || undefined;
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 space-y-6">
-      {/* Breadcrumb */}
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
         <Link
           href={`/anime/${anime.id}`}
@@ -193,24 +192,30 @@ function WatchPageInner({ params }: PageProps) {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
-        {/* Main column */}
         <div className="space-y-4 min-w-0">
-          {/* Player — backend mode */}
-          <VideoPlayer
-            animeId={anime.id}
-            episode={currentEpisode}
-            animeTitle={title}
-            posterUrl={posterUrl}
-            onProgress={handleProgress}
-            autoResumeTime={autoResumeTime}
-            nextEpisode={nextEp}
-            onPlayNext={handlePlayNext}
-          />
+          <div className="relative">
+            <VideoPlayer
+              animeId={anime.id}
+              episode={currentEpisode}
+              animeTitle={title}
+              posterUrl={posterUrl}
+              autoResumeTime={autoResumeTime}
+              skipIntroOffset={85}
+              onEpisodeEnd={handleEpisodeEnd}
+              onProgress={handleProgress}
+            />
+            {showAutoPlay && nextEp && (
+              <AutoPlayOverlay
+                nextEpisodeLabel={`Episode ${nextEp}`}
+                animeTitle={title}
+                onPlayNext={handlePlayNext}
+                onCancel={() => setShowAutoPlay(false)}
+              />
+            )}
+          </div>
 
-          {/* Backend mode badge + verification status */}
           <VerificationBadge />
 
-          {/* Title + meta */}
           <div className="space-y-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
@@ -222,7 +227,6 @@ function WatchPageInner({ params }: PageProps) {
                 </p>
               </div>
 
-              {/* Episode nav */}
               <div className="flex items-center gap-2">
                 <Button
                   variant="secondary"
@@ -232,9 +236,7 @@ function WatchPageInner({ params }: PageProps) {
                   className="bg-xan-card border-xan-border hover:bg-xan-card-hover disabled:opacity-40"
                 >
                   {prevEp ? (
-                    <Link href={`/watch/${anime.id}?ep=${prevEp}`}>
-                      Previous
-                    </Link>
+                    <Link href={`/watch/${anime.id}?ep=${prevEp}`}>Previous</Link>
                   ) : (
                     <span>Previous</span>
                   )}
@@ -247,9 +249,7 @@ function WatchPageInner({ params }: PageProps) {
                   className="bg-xan-card border-xan-border hover:bg-xan-card-hover disabled:opacity-40"
                 >
                   {nextEp ? (
-                    <Link href={`/watch/${anime.id}?ep=${nextEp}`}>
-                      Next
-                    </Link>
+                    <Link href={`/watch/${anime.id}?ep=${nextEp}`}>Next</Link>
                   ) : (
                     <span>Next</span>
                   )}
@@ -257,14 +257,11 @@ function WatchPageInner({ params }: PageProps) {
               </div>
             </div>
 
-            {/* Stats */}
             <div className="flex flex-wrap items-center gap-3 text-sm">
               {anime.averageScore != null && (
                 <div className="flex items-center gap-1.5 text-foreground">
                   <Star className="h-4 w-4 text-yellow-400 fill-yellow-400" />
-                  <span className="font-semibold">
-                    {formatScore(anime.averageScore)}
-                  </span>
+                  <span className="font-semibold">{formatScore(anime.averageScore)}</span>
                 </div>
               )}
               <div className="flex items-center gap-1.5 text-muted-foreground">
@@ -285,7 +282,6 @@ function WatchPageInner({ params }: PageProps) {
               )}
             </div>
 
-            {/* Genres */}
             {anime.genres.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
                 {anime.genres.slice(0, 6).map((genre) => (
@@ -300,7 +296,6 @@ function WatchPageInner({ params }: PageProps) {
               </div>
             )}
 
-            {/* Synopsis */}
             {description && (
               <div className="rounded-lg border border-xan-border bg-xan-card/50 p-4">
                 <h2 className="text-sm font-semibold text-foreground mb-2">
@@ -312,17 +307,14 @@ function WatchPageInner({ params }: PageProps) {
               </div>
             )}
 
-            {/* Similar anime recommendations */}
-            {anime.recommendations?.nodes && anime.recommendations.nodes.length > 0 && (
-              <SimilarAnime
-                recommendations={anime.recommendations.nodes}
-                currentTitle={title}
-              />
-            )}
+            <SimilarAnime
+              recommendations={anime.recommendations?.nodes ?? []}
+              currentAnimeId={anime.id}
+              fallbackGenres={anime.genres}
+            />
           </div>
         </div>
 
-        {/* Sidebar — episode list */}
         <EpisodePanel
           animeId={anime.id}
           episodeCount={anime.episodes}

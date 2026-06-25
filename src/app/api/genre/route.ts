@@ -1,6 +1,4 @@
 // app/api/genre/route.ts
-// Server-side proxy to AniList — keeps client-side fetching simple
-
 import { NextResponse } from "next/server";
 import { fetchByGenre } from "@/lib/anilist";
 
@@ -21,15 +19,9 @@ export async function GET(request: Request) {
         { status: 502 },
       );
     }
-    return NextResponse.json({
-      data: result.data,
-      pageInfo: result.pageInfo,
-    });
+    return NextResponse.json({ data: result.data, pageInfo: result.pageInfo });
   } catch (err) {
     console.error("[API /genre]", err);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

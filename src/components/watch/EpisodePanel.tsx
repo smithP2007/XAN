@@ -1,8 +1,6 @@
 "use client";
 
 // components/watch/EpisodePanel.tsx
-// Sidebar list of episodes for the watch page
-
 import Link from "next/link";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { CheckCircle2, Play } from "lucide-react";
@@ -14,23 +12,46 @@ interface EpisodePanelProps {
   currentEpisode: number;
 }
 
+const MAX_RENDERED = 200;
+
 export function EpisodePanel({
   animeId,
   episodeCount,
   currentEpisode,
 }: EpisodePanelProps) {
-  // Bug 14 fix: cap at 200 episodes to prevent rendering huge DOM
-  const total = episodeCount == null ? 12 : Math.min(episodeCount, 200);
-  const episodes = Array.from({ length: total }, (_, i) => i + 1);
+  const total = episodeCount ?? 12;
+  const cappedTotal = Math.min(total, MAX_RENDERED);
+  const episodes = Array.from({ length: cappedTotal }, (_, i) => i + 1);
+
+  const showCurrentEpisodeHint =
+    currentEpisode > cappedTotal && currentEpisode <= total;
 
   return (
     <aside className="rounded-xl border border-xan-border bg-xan-card/50 overflow-hidden">
       <div className="px-4 py-3 border-b border-xan-border">
         <h3 className="font-semibold text-sm text-foreground">Episodes</h3>
-        <p className="text-xs text-muted-foreground">{total} total</p>
+        <p className="text-xs text-muted-foreground">
+          {total} total{total > MAX_RENDERED && ` (showing first ${MAX_RENDERED})`}
+        </p>
       </div>
       <ScrollArea className="h-[60vh]">
         <div className="divide-y divide-xan-border">
+          {showCurrentEpisodeHint && (
+            <Link
+              href={`/watch/${animeId}?ep=${currentEpisode}`}
+              className="flex items-center gap-3 px-4 py-3 bg-xan-card-hover transition-colors"
+            >
+              <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 border bg-xan-crimson border-xan-crimson text-white">
+                <Play className="h-3.5 w-3.5 fill-white" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-foreground">
+                  Episode {currentEpisode}
+                </p>
+              </div>
+              <CheckCircle2 className="h-4 w-4 text-xan-crimson flex-shrink-0" />
+            </Link>
+          )}
           {episodes.map((n) => {
             const isActive = n === currentEpisode;
             return (

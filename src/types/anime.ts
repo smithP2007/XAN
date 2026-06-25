@@ -154,6 +154,33 @@ export const AnimeDetailSchema = AnimeSchema.extend({
 
 export type AnimeDetail = z.infer<typeof AnimeDetailSchema>;
 
+// ─── Airing Schedule Schema (Feature 3) ───
+export const AiringScheduleSchema = z.object({
+  id: z.number(),
+  airingAt: z.number(),
+  episode: z.number(),
+  media: z
+    .object({
+      id: z.number(),
+      title: AnimeTitleSchema,
+      coverImage: z
+        .object({
+          large: z.string(),
+          color: z.string().nullable().default(null),
+        })
+        .nullable()
+        .default(null),
+      episodes: z.number().nullable().default(null),
+      format: z.string().nullable().default(null),
+      status: z.string().nullable().default(null),
+      averageScore: z.number().nullable().default(null),
+      genres: z.array(z.string()).default([]),
+    })
+    .nullable()
+    .default(null),
+});
+export type AiringSchedule = z.infer<typeof AiringScheduleSchema>;
+
 // ─── Helper: Safe title extraction ───
 export function getTitle(title: AnimeTitle | null | undefined): string {
   if (!title) return "Untitled";

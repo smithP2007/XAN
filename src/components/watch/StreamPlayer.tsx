@@ -1,15 +1,18 @@
 "use client";
 
 // components/watch/StreamPlayer.tsx
-// ✅ Enhanced HLS/MP4 player with:
+// ✅ Feature 5: Enhanced video player
+//
+// Capabilities:
+//   - Real HLS playback (hls.js) + native MP4 with custom header proxy support
 //   - Playback speed selector (0.25x – 2x)
-//   - Picture-in-Picture support
-//   - Keyboard shortcuts (Space, F, M, arrows, etc.)
-//   - Skip intro button (5s–85s)
-//   - Auto-play next episode overlay
-//   - Resume from last position
-//   - Volume slider
-//   - Custom headers via proxy
+//   - Picture-in-Picture toggle
+//   - Keyboard shortcuts (Space/K/F/M/arrows/>/</J/L/P/N/?/Esc)
+//   - Skip Intro button (visible 5s – skipIntroOffset+30s; clicking skips
+//     skipIntroOffset seconds FROM CURRENT POSITION, not jump to fixed mark)
+//   - Volume slider (replaces simple mute toggle)
+//   - Resume from last position (autoResumeTime prop)
+//   - Episode-end detection via onEpisodeEnd callback at 90% progress
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import Hls from "hls.js";
@@ -22,55 +25,63 @@ import {
   Pause,
   Volume2,
   VolumeX,
+  Volume1,
   PictureInPicture2,
-  SkipForward,
   Keyboard,
+  SkipForward,
   Gauge,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { KeyboardShortcutsOverlay } from "./KeyboardShortcutsOverlay";
-import { AutoPlayOverlay } from "./AutoPlayOverlay";
 
 interface StreamPlayerProps {
   streamUrl: string;
   streamType: "hls" | "mp4" | "dash";
   title: string;
   posterUrl?: string;
+  streamHeaders?: Record<string, string>;
+  sourceName?: string;
+  autoResumeTime?: number;
+  skipIntroOffset?: number;
+  onEpisodeEnd?: () => void;
   onProgress?: (currentTime: number, duration: number) => void;
-  headers?: Record<string, string>;
-  provider?: string;
-  skipIntroOffset?: number; // default 85s
-  autoResumeTime?: number; // seconds to seek to on load
-  nextEpisode?: number | null;
-  onPlayNext?: () => void;
 }
 
-const SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+
+function applyProxy(
+  url: string,
+  headers?: Record<string, string>,
+): { url: string; proxied: boolean } {
+  if (!headers || Object.keys(headers).length === 0) {
+    return { url, proxied: false };
+  }
+  const params = new URLSearchParams({ url });
+  for (const [k, v] of Object.entries(headers)) {
+    params.set(`h_${k}`, v);
+  }
+  return { url: `/api/proxy_stream?${params.toString()}`, proxied: true };
+}
 
 export function StreamPlayer({
   streamUrl,
   streamType,
   title,
   posterUrl,
-  onProgress,
-  headers,
-  provider,
-  skipIntroOffset = 85,
+  streamHeaders,
+  sourceName,
   autoResumeTime,
-  nextEpisode = null,
-  onPlayNext,
+  skipIntroOffset = 85,
+  onEpisodeEnd,
+  onProgress,
 }: StreamPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<Hls | null>(null);
-  // Bug 11+12 fix: use refs for callbacks + autoResumeTime to avoid
-  // tearing down the video element on every progress tick / re-render
+  const onEpisodeEndRef = useRef(onEpisodeEnd);
   const onProgressRef = useRef(onProgress);
   const autoResumeTimeRef = useRef(autoResumeTime);
-  useEffect(() => {
-    onProgressRef.current = onProgress;
-    autoResumeTimeRef.current = autoResumeTime;
-  });
+  const endFiredRef = useRef(false);
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [playing, setPlaying] = useState(false);
@@ -79,88 +90,96 @@ export function StreamPlayer({
   const [progress, setProgress] = useState(0);
   const [duration, setDuration] = useState(0);
   const [playbackRate, setPlaybackRate] = useState(1);
-  const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isPip, setIsPip] = useState(false);
-  const [showShortcuts, setShowShortcuts] = useState(false);
-  const [showSkipIntro, setShowSkipIntro] = useState(false);
-  const [showAutoPlay, setShowAutoPlay] = useState(false);
-  const autoPlayFiredRef = useRef(false);
+  const [showSpeedMenu, setShowSpeedMenu] = useState(false);
 
-  const needsProxy = headers && Object.keys(headers).length > 0;
-  const videoUrl = needsProxy ? buildProxyUrl(streamUrl, headers) : streamUrl;
+  useEffect(() => {
+    onEpisodeEndRef.current = onEpisodeEnd;
+    onProgressRef.current = onProgress;
+    autoResumeTimeRef.current = autoResumeTime;
+  });
 
-  // ─── Video event handlers ───
-  const onLoaded = useCallback(() => {
-    setLoading(false);
-    const video = videoRef.current;
-    if (!video) return;
-    setDuration(video.duration || 0);
-    // Resume from saved position — Bug 12 fix: use ref, not prop
-    const resumeTime = autoResumeTimeRef.current;
-    if (resumeTime && resumeTime > 5 && resumeTime < video.duration - 10) {
-      video.currentTime = resumeTime;
-    }
-  }, []);
-
-  const onPlaying = useCallback(() => {
-    setPlaying(true);
-    setLoading(false);
-  }, []);
-
-  const onPause = useCallback(() => setPlaying(false), []);
-
-  const onTimeUpdate = useCallback(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    setProgress(video.currentTime);
-    setDuration(video.duration || 0);
-    // Bug 11 fix: use ref, not prop — avoids re-creating callback on every tick
-    onProgressRef.current?.(video.currentTime, video.duration || 0);
-
-    // Skip intro button visibility (5s to skipIntroOffset)
-    const t = video.currentTime;
-    setShowSkipIntro(t > 5 && t < skipIntroOffset);
-
-    // Auto-play next at 90% completion
-    if (
-      !autoPlayFiredRef.current &&
-      video.duration > 0 &&
-      video.currentTime / video.duration >= 0.9 &&
-      nextEpisode !== null &&
-      onPlayNext
-    ) {
-      autoPlayFiredRef.current = true;
-      setShowAutoPlay(true);
-    }
-  }, [skipIntroOffset, nextEpisode, onPlayNext]);
-
-  const onEnded = useCallback(() => {
-    setPlaying(false);
-    if (nextEpisode !== null && onPlayNext) {
-      setShowAutoPlay(true);
-    }
-  }, [nextEpisode, onPlayNext]);
-
-  const onError = useCallback(() => {
-    setError("Failed to load stream. The source may be unavailable.");
-    setLoading(false);
-  }, []);
-
-  // ─── Initialize video + HLS ───
   useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
 
     setLoading(true);
     setError(null);
-    autoPlayFiredRef.current = false;
-    setShowAutoPlay(false);
+    endFiredRef.current = false;
 
     if (hlsRef.current) {
       hlsRef.current.destroy();
       hlsRef.current = null;
     }
+
+    const { url: effectiveUrl } = applyProxy(streamUrl, streamHeaders);
+
+    let cancelled = false;
+
+    const onLoaded = () => {
+      if (!cancelled) {
+        setLoading(false);
+        setDuration(video.duration || 0);
+        const resumeTime = autoResumeTimeRef.current;
+        if (resumeTime && resumeTime > 0 && isFinite(resumeTime)) {
+          if (video.currentTime < resumeTime - 2 && resumeTime < (video.duration || Infinity) - 5) {
+            try {
+              video.currentTime = resumeTime;
+            } catch {}
+          }
+        }
+      }
+    };
+    const onPlaying = () => {
+      if (!cancelled) {
+        setPlaying(true);
+        setLoading(false);
+      }
+    };
+    const onPause = () => {
+      if (!cancelled) setPlaying(false);
+    };
+    const onTimeUpdate = () => {
+      if (!cancelled) {
+        setProgress(video.currentTime);
+        setDuration(video.duration || 0);
+        onProgressRef.current?.(video.currentTime, video.duration || 0);
+
+        const d = video.duration || 0;
+        if (d > 0 && !endFiredRef.current && video.currentTime >= d * 0.9) {
+          endFiredRef.current = true;
+          onEpisodeEndRef.current?.();
+        }
+      }
+    };
+    const onEnded = () => {
+      if (!cancelled) {
+        setPlaying(false);
+        if (!endFiredRef.current) {
+          endFiredRef.current = true;
+          onEpisodeEndRef.current?.();
+        }
+      }
+    };
+    const onError = () => {
+      if (!cancelled) {
+        setError("Failed to load stream. The source may be unavailable.");
+        setLoading(false);
+      }
+    };
+    const onVolumeChange = () => {
+      if (!cancelled) {
+        setMuted(video.muted);
+        setVolume(video.volume);
+      }
+    };
+    const onRateChange = () => {
+      if (!cancelled) setPlaybackRate(video.playbackRate);
+    };
+    const onEnterPip = () => setIsPip(true);
+    const onLeavePip = () => setIsPip(false);
 
     video.addEventListener("loadeddata", onLoaded);
     video.addEventListener("playing", onPlaying);
@@ -168,12 +187,27 @@ export function StreamPlayer({
     video.addEventListener("timeupdate", onTimeUpdate);
     video.addEventListener("ended", onEnded);
     video.addEventListener("error", onError);
+    video.addEventListener("volumechange", onVolumeChange);
+    video.addEventListener("ratechange", onRateChange);
+    video.addEventListener("enterpictureinpicture", onEnterPip);
+    video.addEventListener("leavepictureinpicture", onLeavePip);
 
     if (streamType === "hls") {
       if (Hls.isSupported()) {
-        const hls = new Hls({ enableWorker: true });
+        const hls = new Hls({
+          enableWorker: true,
+          xhrSetup: (xhr) => {
+            if (streamHeaders) {
+              Object.entries(streamHeaders).forEach(([k, v]) => {
+                try {
+                  xhr.setRequestHeader(k, v);
+                } catch {}
+              });
+            }
+          },
+        });
         hlsRef.current = hls;
-        hls.loadSource(videoUrl);
+        hls.loadSource(effectiveUrl);
         hls.attachMedia(video);
         hls.on(Hls.Events.ERROR, (_evt, data) => {
           if (data.fatal) {
@@ -182,52 +216,44 @@ export function StreamPlayer({
           }
         });
       } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
-        video.src = videoUrl;
+        video.src = effectiveUrl;
       } else {
         setError("HLS is not supported in this browser.");
         setLoading(false);
       }
     } else {
-      video.src = videoUrl;
+      video.src = effectiveUrl;
     }
 
     return () => {
+      cancelled = true;
       video.removeEventListener("loadeddata", onLoaded);
       video.removeEventListener("playing", onPlaying);
       video.removeEventListener("pause", onPause);
       video.removeEventListener("timeupdate", onTimeUpdate);
       video.removeEventListener("ended", onEnded);
       video.removeEventListener("error", onError);
+      video.removeEventListener("volumechange", onVolumeChange);
+      video.removeEventListener("ratechange", onRateChange);
+      video.removeEventListener("enterpictureinpicture", onEnterPip);
+      video.removeEventListener("leavepictureinpicture", onLeavePip);
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
     };
-  }, [videoUrl, streamType, onLoaded, onPlaying, onPause, onTimeUpdate, onEnded, onError]);
+  }, [streamUrl, streamType, streamHeaders]);
 
-  // ─── Fullscreen tracking ───
   useEffect(() => {
-    const handler = () => setIsFullscreen(!!document.fullscreenElement);
+    const handler = () => setIsFullscreen(Boolean(document.fullscreenElement));
     document.addEventListener("fullscreenchange", handler);
     return () => document.removeEventListener("fullscreenchange", handler);
   }, []);
 
-  // ─── PiP tracking ───
-  useEffect(() => {
-    const handler = () => setIsPip(!!document.pictureInPictureElement);
-    document.addEventListener("enterpictureinpicture", handler);
-    document.addEventListener("leavepictureinpicture", handler);
-    return () => {
-      document.removeEventListener("enterpictureinpicture", handler);
-      document.removeEventListener("leavepictureinpicture", handler);
-    };
-  }, []);
-
-  // ─── Control functions ───
   const togglePlay = useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
-    if (video.paused) video.play();
+    if (video.paused) video.play().catch(() => {});
     else video.pause();
   }, []);
 
@@ -235,25 +261,45 @@ export function StreamPlayer({
     const video = videoRef.current;
     if (!video) return;
     video.muted = !video.muted;
-    setMuted(video.muted);
   }, []);
 
   const changeVolume = useCallback((v: number) => {
     const video = videoRef.current;
     if (!video) return;
-    video.volume = v;
-    video.muted = v === 0;
-    setVolume(v);
-    setMuted(v === 0);
+    video.volume = Math.max(0, Math.min(1, v));
+    if (v > 0 && video.muted) video.muted = false;
+  }, []);
+
+  const seekBy = useCallback((delta: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    const newTime = Math.max(0, Math.min(video.duration || 0, video.currentTime + delta));
+    video.currentTime = newTime;
+    setProgress(newTime);
+  }, []);
+
+  const seekTo = useCallback((t: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.currentTime = t;
+    setProgress(t);
+  }, []);
+
+  const changeRate = useCallback((rate: number) => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.playbackRate = rate;
+    setPlaybackRate(rate);
+    setShowSpeedMenu(false);
   }, []);
 
   const toggleFullscreen = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
     if (document.fullscreenElement) {
-      document.exitFullscreen();
+      document.exitFullscreen().catch(() => {});
     } else {
-      container.requestFullscreen?.();
+      container.requestFullscreen?.().catch(() => {});
     }
   }, []);
 
@@ -263,88 +309,73 @@ export function StreamPlayer({
     try {
       if (document.pictureInPictureElement) {
         await document.exitPictureInPicture();
-      } else {
+      } else if (document.pictureInPictureEnabled) {
         await video.requestPictureInPicture();
       }
     } catch (err) {
-      console.warn("PiP failed:", err);
+      console.warn("[PiP] toggle failed:", err);
     }
   }, []);
 
-  const seekBy = useCallback((delta: number) => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + delta));
-    setProgress(video.currentTime);
-  }, []);
-
-  const changeSpeed = useCallback((rate: number) => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.playbackRate = rate;
-    setPlaybackRate(rate);
-    setShowSpeedMenu(false);
-  }, []);
-
   const skipIntro = useCallback(() => {
+    // ✅ Skip 85 seconds FROM CURRENT POSITION (not jump to fixed 85s mark).
+    // Caps at (duration - 5s) so we don't skip past the end of the video.
     const video = videoRef.current;
     if (!video) return;
-    video.currentTime = skipIntroOffset;
-    setShowSkipIntro(false);
-  }, [skipIntroOffset]);
+    const currentTime = video.currentTime;
+    const dur = video.duration || 0;
+    const targetTime = Math.min(currentTime + skipIntroOffset, dur - 5);
+    seekTo(targetTime);
+  }, [seekTo, skipIntroOffset]);
 
-  const seek = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const video = videoRef.current;
-    if (!video) return;
-    const t = Number(e.target.value);
-    video.currentTime = t;
-    setProgress(t);
-  };
-
-  // ─── Keyboard shortcuts ───
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
     const handler = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      // Don't trigger when typing in inputs
+      const target = e.target as HTMLElement | null;
       if (
-        target instanceof HTMLInputElement ||
-        target instanceof HTMLTextAreaElement ||
-        target.isContentEditable
-      )
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.isContentEditable)
+      ) {
         return;
+      }
 
-      switch (e.key.toLowerCase()) {
+      if (showShortcuts && e.key !== "Escape" && e.key !== "?") return;
+
+      switch (e.key) {
         case " ":
         case "k":
+        case "K":
           e.preventDefault();
           togglePlay();
           break;
         case "f":
+        case "F":
           e.preventDefault();
           toggleFullscreen();
           break;
         case "m":
+        case "M":
           e.preventDefault();
           toggleMute();
           break;
-        case "arrowleft":
+        case "ArrowLeft":
         case "j":
+        case "J":
           e.preventDefault();
           seekBy(-10);
           break;
-        case "arrowright":
+        case "ArrowRight":
         case "l":
+        case "L":
           e.preventDefault();
           seekBy(10);
           break;
-        case "arrowup":
+        case "ArrowUp":
           e.preventDefault();
           changeVolume(Math.min(1, volume + 0.1));
           break;
-        case "arrowdown":
+        case "ArrowDown":
           e.preventDefault();
           changeVolume(Math.max(0, volume - 0.1));
           break;
@@ -352,19 +383,22 @@ export function StreamPlayer({
         case ".":
           e.preventDefault();
           {
-            const idx = SPEEDS.indexOf(playbackRate);
-            if (idx < SPEEDS.length - 1) changeSpeed(SPEEDS[idx + 1]);
+            const idx = PLAYBACK_RATES.indexOf(playbackRate);
+            const next = PLAYBACK_RATES[Math.min(PLAYBACK_RATES.length - 1, idx + 1)];
+            if (next) changeRate(next);
           }
           break;
         case "<":
         case ",":
           e.preventDefault();
           {
-            const idx = SPEEDS.indexOf(playbackRate);
-            if (idx > 0) changeSpeed(SPEEDS[idx - 1]);
+            const idx = PLAYBACK_RATES.indexOf(playbackRate);
+            const prev = PLAYBACK_RATES[Math.max(0, idx - 1)];
+            if (prev) changeRate(prev);
           }
           break;
         case "p":
+        case "P":
           e.preventDefault();
           togglePip();
           break;
@@ -373,15 +407,24 @@ export function StreamPlayer({
           e.preventDefault();
           setShowShortcuts((v) => !v);
           break;
-        case "escape":
-          setShowShortcuts(false);
+        default:
           break;
       }
     };
-
-    container.addEventListener("keydown", handler);
-    return () => container.removeEventListener("keydown", handler);
-  }, [togglePlay, toggleFullscreen, toggleMute, togglePip, seekBy, changeVolume, changeSpeed, volume, playbackRate]);
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [
+    showShortcuts,
+    togglePlay,
+    toggleFullscreen,
+    toggleMute,
+    seekBy,
+    changeVolume,
+    changeRate,
+    togglePip,
+    volume,
+    playbackRate,
+  ]);
 
   const formatTime = (s: number) => {
     if (!isFinite(s) || s < 0) return "0:00";
@@ -391,6 +434,14 @@ export function StreamPlayer({
     if (h > 0) return `${h}:${m.toString().padStart(2, "0")}:${sec.toString().padStart(2, "0")}`;
     return `${m}:${sec.toString().padStart(2, "0")}`;
   };
+
+  const VolumeIcon = muted || volume === 0 ? VolumeX : volume < 0.5 ? Volume1 : Volume2;
+
+  const showSkipIntro =
+    !loading &&
+    progress >= 5 &&
+    progress < skipIntroOffset + 30 &&
+    duration > skipIntroOffset + 10;
 
   if (error) {
     return (
@@ -403,179 +454,163 @@ export function StreamPlayer({
   }
 
   return (
-    <>
-      <div className="space-y-2">
-        <div
-          ref={containerRef}
-          className="relative w-full aspect-video bg-black rounded-lg overflow-hidden border border-xan-border group"
-          tabIndex={0}
+    <div
+      ref={containerRef}
+      className="relative w-full aspect-video bg-black rounded-lg overflow-hidden border border-xan-border group"
+    >
+      <video
+        ref={videoRef}
+        poster={posterUrl}
+        className="w-full h-full object-contain"
+        playsInline
+        onClick={togglePlay}
+        title={title}
+      />
+
+      {loading && (
+        <div className="absolute inset-0 flex items-center justify-center bg-black/50 pointer-events-none">
+          <Loader2 className="h-10 w-10 text-white animate-spin" />
+        </div>
+      )}
+
+      {showSkipIntro && (
+        <button
+          onClick={skipIntro}
+          className="absolute bottom-24 right-4 z-20 inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-xan-crimson/90 hover:bg-xan-crimson text-white text-sm font-semibold shadow-lg transition-all hover:scale-105"
         >
-          <video
-            ref={videoRef}
-            poster={posterUrl}
-            className="w-full h-full object-contain"
-            playsInline
-            onClick={togglePlay}
-            title={title}
-          />
+          <SkipForward className="h-4 w-4" />
+          Skip Intro
+        </button>
+      )}
 
-          {/* Loading overlay */}
-          {loading && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/50 pointer-events-none">
-              <Loader2 className="h-10 w-10 text-white animate-spin" />
-            </div>
-          )}
+      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent px-4 pb-3 pt-8 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+        <input
+          type="range"
+          min={0}
+          max={duration || 0}
+          step={0.1}
+          value={progress}
+          onChange={(e) => seekTo(Number(e.target.value))}
+          className="w-full h-1 rounded-full appearance-none bg-white/20 cursor-pointer mb-2
+            [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
+            [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-xan-crimson"
+          aria-label="Seek"
+        />
 
-          {/* Skip Intro button */}
-          {showSkipIntro && (
+        <div className="flex items-center justify-between text-white">
+          <div className="flex items-center gap-2">
             <button
-              onClick={skipIntro}
-              className="absolute bottom-24 right-4 bg-xan-crimson hover:bg-xan-crimson/90 text-white px-4 py-2 rounded-lg text-sm font-medium shadow-lg flex items-center gap-2 transition-all animate-in fade-in slide-in-from-bottom-2"
+              onClick={togglePlay}
+              className="hover:text-xan-crimson transition-colors"
+              aria-label={playing ? "Pause" : "Play"}
             >
-              Skip Intro
-              <SkipForward className="h-4 w-4" />
+              {playing ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5 fill-white" />}
             </button>
-          )}
 
-          {/* Auto-play overlay */}
-          <AutoPlayOverlay
-            open={showAutoPlay}
-            nextEpisode={nextEpisode}
-            animeTitle={title}
-            onPlayNow={() => {
-              setShowAutoPlay(false);
-              onPlayNext?.();
-            }}
-            onCancel={() => setShowAutoPlay(false)}
-          />
-
-          {/* Custom controls */}
-          <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/90 to-transparent px-4 pb-3 pt-8 opacity-0 group-hover:opacity-100 transition-opacity focus-within:opacity-100">
-            {/* Progress bar */}
+            <button
+              onClick={toggleMute}
+              className="hover:text-xan-crimson transition-colors"
+              aria-label={muted ? "Unmute" : "Mute"}
+            >
+              <VolumeIcon className="h-5 w-5" />
+            </button>
             <input
               type="range"
               min={0}
-              max={duration || 0}
-              step={0.1}
-              value={progress}
-              onChange={seek}
-              className="w-full h-1 rounded-full appearance-none bg-white/20 cursor-pointer mb-2
-                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3 [&::-webkit-slider-thumb]:h-3
-                [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-xan-crimson"
-              aria-label="Seek"
+              max={1}
+              step={0.05}
+              value={muted ? 0 : volume}
+              onChange={(e) => changeVolume(Number(e.target.value))}
+              className="w-16 h-1 rounded-full appearance-none bg-white/20 cursor-pointer
+                [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5
+                [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
+              aria-label="Volume"
             />
 
-            <div className="flex items-center justify-between text-white">
-              <div className="flex items-center gap-2">
-                <button onClick={togglePlay} className="hover:text-xan-crimson transition-colors" aria-label={playing ? "Pause" : "Play"}>
-                  {playing ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5 fill-white" />}
-                </button>
-                <button onClick={toggleMute} className="hover:text-xan-crimson transition-colors" aria-label={muted ? "Unmute" : "Mute"}>
-                  {muted ? <VolumeX className="h-5 w-5" /> : <Volume2 className="h-5 w-5" />}
-                </button>
-                {/* Volume slider */}
-                <input
-                  type="range"
-                  min={0}
-                  max={1}
-                  step={0.05}
-                  value={muted ? 0 : volume}
-                  onChange={(e) => changeVolume(Number(e.target.value))}
-                  className="w-16 h-1 rounded-full appearance-none bg-white/20 cursor-pointer hidden sm:block
-                    [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5
-                    [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-white"
-                  aria-label="Volume"
-                />
-                <span className="text-xs font-mono ml-1">
-                  {formatTime(progress)} / {formatTime(duration)}
-                </span>
-              </div>
+            <span className="text-xs font-mono ml-1">
+              {formatTime(progress)} / {formatTime(duration)}
+            </span>
+          </div>
 
-              <div className="flex items-center gap-2">
-                {/* Speed selector */}
-                <div className="relative">
-                  <button
-                    onClick={() => setShowSpeedMenu((v) => !v)}
-                    className="flex items-center gap-1 text-xs px-2 py-1 rounded hover:bg-white/10 transition-colors"
-                    aria-label="Playback speed"
-                  >
-                    <Gauge className="h-3.5 w-3.5" />
-                    {playbackRate}x
-                  </button>
-                  {showSpeedMenu && (
-                    <div className="absolute bottom-full right-0 mb-2 bg-zinc-900 border border-xan-border rounded-lg py-1 min-w-[80px] shadow-xl">
-                      {SPEEDS.map((speed) => (
-                        <button
-                          key={speed}
-                          onClick={() => changeSpeed(speed)}
-                          className={`block w-full text-left px-3 py-1.5 text-xs hover:bg-white/10 transition-colors ${
-                            speed === playbackRate ? "text-xan-crimson font-semibold" : "text-white"
-                          }`}
-                        >
-                          {speed}x
-                        </button>
-                      ))}
-                    </div>
-                  )}
+          <div className="flex items-center gap-2 relative">
+            <div className="relative">
+              <button
+                onClick={() => setShowSpeedMenu((v) => !v)}
+                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-white/10 hover:bg-white/20 transition-colors"
+                aria-label="Playback speed"
+                title="Playback speed"
+              >
+                <Gauge className="h-3 w-3" />
+                {playbackRate}x
+              </button>
+              {showSpeedMenu && (
+                <div className="absolute bottom-full right-0 mb-2 py-1 rounded-md bg-xan-card border border-xan-border shadow-xl min-w-[88px]">
+                  {PLAYBACK_RATES.map((rate) => (
+                    <button
+                      key={rate}
+                      onClick={() => changeRate(rate)}
+                      className={`block w-full text-left px-3 py-1.5 text-xs hover:bg-white/5 transition-colors ${
+                        rate === playbackRate
+                          ? "text-xan-crimson font-semibold"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {rate}x{rate === 1 ? " (normal)" : ""}
+                    </button>
+                  ))}
                 </div>
-
-                {/* PiP */}
-                <button onClick={togglePip} className={`hover:text-xan-crimson transition-colors ${isPip ? "text-xan-crimson" : ""}`} aria-label="Picture in Picture">
-                  <PictureInPicture2 className="h-4 w-4" />
-                </button>
-
-                {/* Keyboard shortcuts */}
-                <button onClick={() => setShowShortcuts(true)} className="hover:text-xan-crimson transition-colors" aria-label="Keyboard shortcuts">
-                  <Keyboard className="h-4 w-4" />
-                </button>
-
-                {/* Fullscreen */}
-                <button onClick={toggleFullscreen} className="hover:text-xan-crimson transition-colors" aria-label="Fullscreen">
-                  {isFullscreen ? <Minimize className="h-5 w-5" /> : <Maximize className="h-5 w-5" />}
-                </button>
-              </div>
+              )}
             </div>
-          </div>
 
-          {/* Center play button when paused */}
-          {!playing && !loading && !showAutoPlay && (
+            <span className="text-xs px-2 py-0.5 rounded bg-white/10 flex items-center gap-1">
+              {sourceName ?? (streamType === "hls" ? "HLS" : streamType.toUpperCase())}
+            </span>
+
             <button
-              onClick={togglePlay}
-              className="absolute inset-0 flex items-center justify-center"
-              aria-label="Play"
+              onClick={togglePip}
+              className={`hover:text-xan-crimson transition-colors ${isPip ? "text-xan-crimson" : ""}`}
+              aria-label="Picture-in-Picture"
+              title="Picture-in-Picture (P)"
             >
-              <div className="w-16 h-16 rounded-full bg-xan-crimson/90 hover:bg-xan-crimson flex items-center justify-center shadow-xl scale-95 hover:scale-100 transition-all">
-                <Play className="h-7 w-7 text-white fill-white ml-1" />
-              </div>
+              <PictureInPicture2 className="h-5 w-5" />
             </button>
-          )}
-        </div>
 
-        {/* Provider badge */}
-        {provider && provider !== "demo" && (
-          <div className="flex items-center gap-2">
-            <span className="text-xs px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 flex items-center gap-1">
-              {provider}
-            </span>
-            <span className="text-xs text-muted-foreground">
-              Real anime stream · Press <kbd className="px-1 py-0.5 bg-xan-card border border-xan-border rounded text-[10px]">?</kbd> for shortcuts
-            </span>
+            <button
+              onClick={() => setShowShortcuts(true)}
+              className="hover:text-xan-crimson transition-colors"
+              aria-label="Keyboard shortcuts"
+              title="Keyboard shortcuts (?)"
+            >
+              <Keyboard className="h-5 w-5" />
+            </button>
+
+            <button
+              onClick={toggleFullscreen}
+              className="hover:text-xan-crimson transition-colors"
+              aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}
+              title="Fullscreen (F)"
+            >
+              {isFullscreen ? <Minimize className="h-5 w-5" /> : <Maximize className="h-5 w-5" />}
+            </button>
           </div>
-        )}
+        </div>
       </div>
 
-      <KeyboardShortcutsOverlay open={showShortcuts} onClose={() => setShowShortcuts(false)} />
-    </>
-  );
-}
+      {!playing && !loading && (
+        <button
+          onClick={togglePlay}
+          className="absolute inset-0 flex items-center justify-center"
+          aria-label="Play"
+        >
+          <div className="w-16 h-16 rounded-full bg-xan-crimson/90 hover:bg-xan-crimson flex items-center justify-center shadow-xl scale-95 hover:scale-100 transition-all">
+            <Play className="h-7 w-7 text-white fill-white ml-1" />
+          </div>
+        </button>
+      )}
 
-// ─── Helper: build proxy URL ───
-function buildProxyUrl(streamUrl: string, headers?: Record<string, string>): string {
-  const params = new URLSearchParams({ url: streamUrl });
-  if (headers) {
-    for (const [key, value] of Object.entries(headers)) {
-      params.set(key, value);
-    }
-  }
-  return `/api/proxy_stream?${params.toString()}`;
+      {showShortcuts && (
+        <KeyboardShortcutsOverlay onClose={() => setShowShortcuts(false)} />
+      )}
+    </div>
+  );
 }

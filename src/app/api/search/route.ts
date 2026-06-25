@@ -21,15 +21,9 @@ export async function GET(request: Request) {
         { status: 502 },
       );
     }
-    return NextResponse.json({
-      data: result.data,
-      pageInfo: result.pageInfo,
-    });
+    return NextResponse.json({ data: result.data, pageInfo: result.pageInfo });
   } catch (err) {
     console.error("[API /search]", err);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 },
-    );
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

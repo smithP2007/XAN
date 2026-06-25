@@ -1,134 +1,89 @@
 // lib/extractors/megacloud.ts
-// ✅ TypeScript port of SNI's MegacloudExtractor.
-// Scrapes the Megacloud embed page to find an encrypted source URL,
-// then XOR-decrypts it with the rcKey extracted from the page.
+const MEGACLOUD_HEADERS: HeadersInit = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131",
+  Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+  Referer: "https://youtu-chan.com",
+  Origin: "https://youtu-chan.com",
+};
 
-const MEGACLOUD_EMBED_REGEX = /src="([^"]*megacloud\.tv[^"]*)"/;
-const RCKEY_REGEX = /MD5\.of\("(.+?)"\)/;
-const SOURCES_REGEX = /"sources":\s*\[(\{[^}]+\})\]/;
-const ENCUR_REGEX = /"file":\s*"(.*?)"/;
-
-export interface ExtractedStream {
+export interface ExtractedSource {
   url: string;
   quality: string | null;
   type: "hls" | "mp4";
 }
 
-/**
- * Extract a playable stream URL from a Megacloud embed page.
- *
- * @param embedUrl The Megacloud embed URL (e.g. https://megacloud.tv/embed-...)
- * @returns ExtractedStream or null if extraction fails
- */
-export async function extractMegacloud(
-  embedUrl: string,
-): Promise<ExtractedStream | null> {
+export async function extractMegacloud(embedUrl: string): Promise<ExtractedSource[]> {
   try {
     const res = await fetch(embedUrl, {
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        Referer: "https://youtu-chan.com",
-      },
-      signal: AbortSignal.timeout(10000),
+      headers: MEGACLOUD_HEADERS,
+      signal: AbortSignal.timeout(10_000),
     });
-
-    if (!res.ok) {
-      console.warn(`[Megacloud] HTTP ${res.status} for ${embedUrl}`);
-      return null;
-    }
-
+    if (!res.ok) return [];
     const html = await res.text();
 
-    // Extract rcKey
-    const rcKeyMatch = html.match(RCKEY_REGEX);
-    if (!rcKeyMatch?.[1]) {
-      console.warn("[Megacloud] rcKey not found in embed page");
-      return null;
-    }
+    const rcKeyMatch = html.match(/MD5\.of\("(.+?)"\)/);
+    if (!rcKeyMatch?.[1]) return [];
     const rcKey = rcKeyMatch[1];
 
-    // Extract encrypted file URL
-    const encUrlMatch = html.match(ENCUR_REGEX);
-    if (!encUrlMatch?.[1]) {
-      // Try the sources array format
-      const sourcesMatch = html.match(SOURCES_REGEX);
-      if (!sourcesMatch?.[1]) {
-        console.warn("[Megacloud] No source URL found in embed page");
-        return null;
-      }
-      // Parse the sources JSON
+    const sourcesMatch =
+      html.match(/sources\s*[:=]\s*(\[\s*\{[\s\S]*?\}\s*\])/) ??
+      html.match(/window\.\w+\s*=\s*(\[\s*\{[\s\S]*?\}\s*\])/);
+    if (!sourcesMatch?.[1]) return [];
+
+    let sourcesRaw: unknown;
+    try {
+      sourcesRaw = JSON.parse(sourcesMatch[1]);
+    } catch {
+      const fixed = sourcesMatch[1].replace(
+        /([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)/g,
+        '$1"$2"$3',
+      );
       try {
-        const sourceObj = JSON.parse(sourcesMatch[1]);
-        if (sourceObj.file) {
-          return {
-            url: sourceObj.file,
-            quality: sourceObj.label ?? null,
-            type: sourceObj.file.includes(".m3u8") ? "hls" : "mp4",
-          };
-        }
+        sourcesRaw = JSON.parse(fixed);
       } catch {
-        // Fall through to XOR decrypt
+        return [];
       }
     }
 
-    const encUrl = encUrlMatch?.[1];
-    if (!encUrl) {
-      console.warn("[Megacloud] No encUrl found");
-      return null;
+    if (!Array.isArray(sourcesRaw)) return [];
+
+    const results: ExtractedSource[] = [];
+    for (const entry of sourcesRaw as Array<Record<string, unknown>>) {
+      const encFile = entry?.file;
+      if (typeof encFile !== "string" || !encFile) continue;
+
+      const decrypted = xorDecrypt(encFile, rcKey);
+      if (!decrypted) continue;
+
+      const isHls = decrypted.includes(".m3u8");
+      results.push({
+        url: decrypted,
+        quality: typeof entry.label === "string" ? entry.label : null,
+        type: isHls ? "hls" : "mp4",
+      });
     }
 
-    // XOR-decrypt the encUrl with rcKey
-    const decrypted = xorDecrypt(encUrl, rcKey);
-    if (!decrypted) {
-      console.warn("[Megacloud] XOR decryption failed");
-      return null;
-    }
-
-    return {
-      url: decrypted,
-      quality: null,
-      type: decrypted.includes(".m3u8") ? "hls" : "mp4",
-    };
+    return results;
   } catch (err) {
-    console.error("[Megacloud] Extraction failed:", err);
-    return null;
+    console.error("[megacloud] extract failed:", err);
+    return [];
   }
 }
 
-/**
- * XOR-decrypt a string with a key.
- * Each byte of the encrypted string is XOR'd with the corresponding byte of the key (cycling).
- */
-function xorDecrypt(encrypted: string, key: string): string | null {
+function xorDecrypt(hexPayload: string, key: string): string | null {
   try {
-    // The encrypted string is typically hex-encoded
-    let bytes: number[];
-    if (/^[0-9a-fA-F]+$/.test(encrypted)) {
-      // Hex decode
-      bytes = [];
-      for (let i = 0; i < encrypted.length; i += 2) {
-        bytes.push(parseInt(encrypted.slice(i, i + 2), 16));
-      }
-    } else {
-      // Treat as raw string
-      bytes = Array.from(encrypted, (c) => c.charCodeAt(0));
+    const isHex = /^[0-9a-fA-F]+$/.test(hexPayload) && hexPayload.length % 2 === 0;
+    const bytes = isHex
+      ? Buffer.from(hexPayload, "hex")
+      : Buffer.from(hexPayload, "utf-8");
+
+    const keyBytes = Buffer.from(key, "utf-8");
+    const out = Buffer.allocUnsafe(bytes.length);
+    for (let i = 0; i < bytes.length; i++) {
+      out[i] = bytes[i] ^ keyBytes[i % keyBytes.length];
     }
-
-    const keyBytes = Array.from(key, (c) => c.charCodeAt(0));
-    const decrypted = bytes.map(
-      (b, i) => b ^ keyBytes[i % keyBytes.length],
-    );
-
-    return String.fromCharCode(...decrypted);
+    return out.toString("utf-8");
   } catch {
     return null;
   }
-}
-
-/**
- * Check if a URL is a Megacloud embed URL.
- */
-export function isMegacloudUrl(url: string): boolean {
-  return url.includes("megacloud.tv") || MEGACLOUD_EMBED_REGEX.test(url);
 }

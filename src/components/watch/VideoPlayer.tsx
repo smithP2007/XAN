@@ -1,40 +1,28 @@
 "use client";
 
 // components/watch/VideoPlayer.tsx
-// ✅ Simplified stream loading — server proxy does all the heavy lifting.
-// Flow: server proxy → demo fallback.
-// The server proxy now uses persisted GraphQL queries (no CF cookie needed).
-
 import { useState, useEffect, useCallback } from "react";
 import { StreamPlayer } from "./StreamPlayer";
-import { AlertCircle, Loader2, Settings } from "lucide-react";
-import Link from "next/link";
-import { Button } from "@/components/ui/button";
+import { AlertCircle, Loader2 } from "lucide-react";
 
 interface VideoPlayerProps {
   animeId: number;
   episode: number;
   animeTitle: string;
   posterUrl?: string;
-  onProgress?: (currentTime: number, duration: number) => void;
-  skipIntroOffset?: number;
   autoResumeTime?: number;
-  nextEpisode?: number | null;
-  onPlayNext?: () => void;
+  skipIntroOffset?: number;
+  onEpisodeEnd?: () => void;
+  onProgress?: (currentTime: number, duration: number) => void;
 }
 
 interface StreamData {
   url: string;
   type: "hls" | "mp4" | "dash";
   quality: string | null;
-}
-
-interface StreamResponse {
-  stream: StreamData;
-  provider?: string;
-  sourceName?: string;
   headers?: Record<string, string>;
-  fallbackReason?: string | null;
+  sourceName?: string;
+  provider?: string;
 }
 
 export function VideoPlayer({
@@ -42,41 +30,39 @@ export function VideoPlayer({
   episode,
   animeTitle,
   posterUrl,
-  onProgress,
-  skipIntroOffset,
   autoResumeTime,
-  nextEpisode,
-  onPlayNext,
+  skipIntroOffset,
+  onEpisodeEnd,
+  onProgress,
 }: VideoPlayerProps) {
   const [stream, setStream] = useState<StreamData | null>(null);
-  const [headers, setHeaders] = useState<Record<string, string> | undefined>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [provider, setProvider] = useState<string>("");
 
   const stableOnProgress = useCallback(
     (t: number, d: number) => onProgress?.(t, d),
     [onProgress],
   );
 
+  const stableOnEpisodeEnd = useCallback(() => onEpisodeEnd?.(), [onEpisodeEnd]);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
     setStream(null);
-    setHeaders(undefined);
-    setProvider("");
 
     const titleParam = animeTitle ? `&title=${encodeURIComponent(animeTitle)}` : "";
 
-    const loadStream = async () => {
-      try {
-        const res = await fetch(`/api/stream/${animeId}/${episode}?${titleParam}`);
+    fetch(`/api/stream/${animeId}/${episode}?${titleParam}`)
+      .then(async (res) => {
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
           throw new Error(body?.error || `Backend returned ${res.status}`);
         }
-        const json: StreamResponse = await res.json();
+        return res.json();
+      })
+      .then((json) => {
         if (cancelled) return;
         const s = json?.stream;
         if (s && s.url) {
@@ -84,104 +70,58 @@ export function VideoPlayer({
             url: s.url,
             type: s.type,
             quality: s.quality ?? null,
+            headers: s.headers,
+            sourceName: s.sourceName,
+            provider: json?.provider,
           });
-          setHeaders(json.headers);
-          setProvider(json.provider ?? json.sourceName ?? "");
           setLoading(false);
         } else {
-          throw new Error("No stream URL in response");
+          setError("Backend returned an invalid stream response");
+          setLoading(false);
         }
-      } catch (err) {
+      })
+      .catch((err) => {
         if (cancelled) return;
-        const msg = err instanceof Error ? err.message : "Failed to load stream";
-
-        // If it's a network error (dev server restarted, etc.), retry once after 2s
-        if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) {
-          console.log("[VideoPlayer] Network error, retrying in 2s...");
-          await new Promise((r) => setTimeout(r, 2000));
-          if (!cancelled) {
-            try {
-              const retryRes = await fetch(`/api/stream/${animeId}/${episode}?${titleParam}&allowDemo=true`);
-              if (retryRes.ok) {
-                const retryJson: StreamResponse = await retryRes.json();
-                if (!cancelled && retryJson?.stream?.url) {
-                  setStream({
-                    url: retryJson.stream.url,
-                    type: retryJson.stream.type,
-                    quality: retryJson.stream.quality ?? null,
-                  });
-                  setHeaders(retryJson.headers);
-                  setProvider(retryJson.provider ?? retryJson.sourceName ?? "demo");
-                  setLoading(false);
-                  return;
-                }
-              }
-            } catch {
-              // Fall through to error
-            }
-          }
-        }
-
-        setError(msg);
+        setError(err instanceof Error ? err.message : "Failed to load stream");
         setLoading(false);
-      }
-    };
-
-    loadStream();
+      });
 
     return () => {
       cancelled = true;
     };
   }, [animeId, episode, animeTitle]);
 
-  // ─── Error state ───
   if (error) {
     return (
       <div className="w-full aspect-video bg-zinc-900 rounded-lg flex flex-col items-center justify-center text-center p-6 border border-xan-border">
         <AlertCircle className="h-10 w-10 text-xan-crimson mb-3" />
         <p className="text-foreground font-medium">Stream Unavailable</p>
         <p className="text-sm text-muted-foreground mt-1 max-w-md">{error}</p>
-        <Button asChild variant="secondary" size="sm" className="mt-4">
-          <Link href="/settings">
-            <Settings className="h-4 w-4 mr-1.5" />
-            Go to Settings
-          </Link>
-        </Button>
       </div>
     );
   }
 
-  // ─── Loading state ───
   if (loading || !stream) {
     return (
       <div className="w-full aspect-video bg-zinc-900 rounded-lg flex flex-col items-center justify-center border border-xan-border">
         <Loader2 className="h-10 w-10 text-xan-crimson animate-spin mb-3" />
-        <p className="text-sm text-muted-foreground">
-          Loading episode {episode}…
-        </p>
-        <p className="text-xs text-muted-foreground/60 mt-1">
-          Fetching stream sources from AllAnime…
-        </p>
+        <p className="text-sm text-muted-foreground">Loading episode {episode}…</p>
       </div>
     );
   }
 
-  // ─── Play ───
   return (
-    <div className="space-y-2">
-      <StreamPlayer
-        streamUrl={stream.url}
-        streamType={stream.type}
-        title={`${animeTitle} — Episode ${episode}`}
-        posterUrl={posterUrl}
-        onProgress={stableOnProgress}
-        headers={headers}
-        provider={provider}
-        skipIntroOffset={skipIntroOffset}
-        autoResumeTime={autoResumeTime}
-        nextEpisode={nextEpisode}
-        onPlayNext={onPlayNext}
-      />
-    </div>
+    <StreamPlayer
+      streamUrl={stream.url}
+      streamType={stream.type}
+      title={`${animeTitle} — Episode ${episode}`}
+      posterUrl={posterUrl}
+      streamHeaders={stream.headers}
+      sourceName={stream.sourceName}
+      autoResumeTime={autoResumeTime}
+      skipIntroOffset={skipIntroOffset}
+      onEpisodeEnd={stableOnEpisodeEnd}
+      onProgress={stableOnProgress}
+    />
   );
 }

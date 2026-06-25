@@ -40,8 +40,9 @@ const LOCAL_FALLBACK =
   process.env.NODE_ENV === "development"
     ? "http://localhost:3000/api"
     : "";
-const BACKEND_URL =
-  process.env.NEXT_PUBLIC_BACKEND_URL || VERCEL_URL || LOCAL_FALLBACK;
+const EXPLICIT_BACKEND_URL =
+  process.env.NEXT_PUBLIC_BACKEND_URL || VERCEL_URL;
+const BACKEND_URL = EXPLICIT_BACKEND_URL || LOCAL_FALLBACK;
 const REQUEST_TIMEOUT_MS = 10000;
 
 export interface BackendConfig {
@@ -51,7 +52,7 @@ export interface BackendConfig {
 
 export function getBackendConfig(): BackendConfig {
   return {
-    configured: Boolean(BACKEND_URL),
+    configured: Boolean(EXPLICIT_BACKEND_URL),
     url: BACKEND_URL,
   };
 }

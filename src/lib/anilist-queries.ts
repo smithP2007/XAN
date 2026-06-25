@@ -108,7 +108,6 @@ export const AIRING_SCHEDULE_QUERY = `
           status
           averageScore
           genres
-          bannerImage
         }
       }
     }
