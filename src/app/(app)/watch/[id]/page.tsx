@@ -121,7 +121,7 @@ function WatchPageInner({ params }: PageProps) {
     };
   }, [anime, animeId]);
 
-  // ✅ Reset fallback flag when episode or mode changes
+  // ✅ Reset fallback flag when episode changes OR when user manually changes mode
   useEffect(() => {
     setFellBackToSub(false);
   }, [currentEpisode, mode]);
@@ -207,11 +207,13 @@ function WatchPageInner({ params }: PageProps) {
     const nextEp = currentEpisode < total ? currentEpisode + 1 : null;
     if (nextEp) {
       setShowAutoPlay(false);
-      router.push(`/watch/${anime.id}?ep=${nextEp}`);
+      // ✅ Preserve mode (sub/dub) when auto-playing next episode
+      const typeParam = mode === "dub" ? "&type=dub" : "";
+      router.push(`/watch/${anime.id}?ep=${nextEp}${typeParam}`);
     } else {
       setShowAutoPlay(false);
     }
-  }, [anime, currentEpisode, router]);
+  }, [anime, currentEpisode, router, mode]);
 
   useEffect(() => {
     if (!anime) return;
@@ -256,6 +258,8 @@ function WatchPageInner({ params }: PageProps) {
   const prevEp = currentEpisode > 1 ? currentEpisode - 1 : null;
   const nextEp = currentEpisode < total ? currentEpisode + 1 : null;
   const posterUrl = anime.bannerImage || anime.coverImage?.large || undefined;
+  // ✅ Preserve sub/dub mode in episode navigation links
+  const typeParam = mode === "dub" ? "&type=dub" : "";
 
   return (
     <div className="max-w-7xl mx-auto px-4 md:px-6 py-6 space-y-6">
@@ -292,9 +296,7 @@ function WatchPageInner({ params }: PageProps) {
               skipIntroOffset={85}
               onEpisodeEnd={handleEpisodeEnd}
               onProgress={handleProgress}
-              initialMode={mode}
-              dubAvailable={dubAvailable}
-              onModeChange={handleModeChange}
+              mode={mode}
               onFallbackToSub={handleFallbackToSub}
             />
             {showAutoPlay && nextEp && (
@@ -329,7 +331,7 @@ function WatchPageInner({ params }: PageProps) {
                   className="bg-xan-card border-xan-border hover:bg-xan-card-hover disabled:opacity-40"
                 >
                   {prevEp ? (
-                    <Link href={`/watch/${anime.id}?ep=${prevEp}`}>Previous</Link>
+                    <Link href={`/watch/${anime.id}?ep=${prevEp}${typeParam}`}>Previous</Link>
                   ) : (
                     <span>Previous</span>
                   )}
@@ -342,7 +344,7 @@ function WatchPageInner({ params }: PageProps) {
                   className="bg-xan-card border-xan-border hover:bg-xan-card-hover disabled:opacity-40"
                 >
                   {nextEp ? (
-                    <Link href={`/watch/${anime.id}?ep=${nextEp}`}>Next</Link>
+                    <Link href={`/watch/${anime.id}?ep=${nextEp}${typeParam}`}>Next</Link>
                   ) : (
                     <span>Next</span>
                   )}

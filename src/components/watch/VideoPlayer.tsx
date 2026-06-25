@@ -1,10 +1,13 @@
 "use client";
 
 // components/watch/VideoPlayer.tsx
-// ✅ Sub/Dub switching: accepts initialMode + dubAvailable, passes mode to API
-import { useState, useEffect, useCallback } from "react";
+// ✅ Controlled mode — parent (watch page) owns the mode state via localStorage.
+// ✅ Throttled progress reporting (max 1 write/5s) to avoid localStorage spam.
+// ✅ Retry button on error.
+import { useState, useEffect, useCallback, useRef } from "react";
 import { StreamPlayer } from "./StreamPlayer";
-import { AlertCircle, Loader2 } from "lucide-react";
+import { AlertCircle, Loader2, RotateCcw } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 interface VideoPlayerProps {
   animeId: number;
@@ -15,13 +18,9 @@ interface VideoPlayerProps {
   skipIntroOffset?: number;
   onEpisodeEnd?: () => void;
   onProgress?: (currentTime: number, duration: number) => void;
-  /** Initial sub/dub mode (default "sub") */
-  initialMode?: "sub" | "dub";
-  /** Whether dub is available for this anime (from AllAnime cross-ref) */
-  dubAvailable?: boolean;
-  /** Called when user switches sub/dub — parent can update URL + localStorage */
-  onModeChange?: (mode: "sub" | "dub") => void;
-  /** Called when dub was requested but fell back to sub for this episode */
+  /** Current sub/dub mode (controlled by parent) */
+  mode: "sub" | "dub";
+  /** Called when dub falls back to sub for this episode */
   onFallbackToSub?: () => void;
 }
 
@@ -43,39 +42,41 @@ export function VideoPlayer({
   skipIntroOffset,
   onEpisodeEnd,
   onProgress,
-  initialMode = "sub",
-  dubAvailable = false,
-  onModeChange,
+  mode,
   onFallbackToSub,
 }: VideoPlayerProps) {
   const [stream, setStream] = useState<StreamData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<"sub" | "dub">(initialMode);
+  // ✅ Retry nonce — incrementing forces the fetch effect to re-run
+  const [retryNonce, setRetryNonce] = useState(0);
 
+  // ✅ Throttle progress reporting — max 1 write per 5 seconds.
+  // Without this, handleProgress fires ~4x/second (every timeupdate event),
+  // each time writing to localStorage via useWatchHistory.addEntry.
+  const lastProgressWriteRef = useRef(0);
   const stableOnProgress = useCallback(
-    (t: number, d: number) => onProgress?.(t, d),
+    (t: number, d: number) => {
+      const now = Date.now();
+      // Only write to history at most once every 5 seconds, OR if we're near the end
+      if (now - lastProgressWriteRef.current < 5000 && t < d * 0.95) return;
+      lastProgressWriteRef.current = now;
+      onProgress?.(t, d);
+    },
     [onProgress],
   );
 
   const stableOnEpisodeEnd = useCallback(() => onEpisodeEnd?.(), [onEpisodeEnd]);
-
-  const handleModeChange = useCallback(
-    (newMode: "sub" | "dub") => {
-      setMode(newMode);
-      onModeChange?.(newMode);
-    },
-    [onModeChange],
-  );
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
     setStream(null);
+    // Reset progress throttle on new fetch
+    lastProgressWriteRef.current = 0;
 
     const titleParam = animeTitle ? `&title=${encodeURIComponent(animeTitle)}` : "";
-    // ✅ Pass mode as type=sub|dub to the stream API
     const modeParam = `&type=${mode}`;
 
     fetch(`/api/stream/${animeId}/${episode}?${titleParam}${modeParam}`)
@@ -123,7 +124,7 @@ export function VideoPlayer({
     return () => {
       cancelled = true;
     };
-  }, [animeId, episode, animeTitle, mode]);
+  }, [animeId, episode, animeTitle, mode, retryNonce, onFallbackToSub]);
 
   if (error) {
     return (
@@ -131,6 +132,15 @@ export function VideoPlayer({
         <AlertCircle className="h-10 w-10 text-xan-crimson mb-3" />
         <p className="text-foreground font-medium">Stream Unavailable</p>
         <p className="text-sm text-muted-foreground mt-1 max-w-md">{error}</p>
+        <Button
+          onClick={() => setRetryNonce((n) => n + 1)}
+          variant="secondary"
+          size="sm"
+          className="mt-4 bg-xan-card border-xan-border hover:bg-xan-card-hover"
+        >
+          <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+          Retry
+        </Button>
       </div>
     );
   }
@@ -159,8 +169,6 @@ export function VideoPlayer({
       onEpisodeEnd={stableOnEpisodeEnd}
       onProgress={stableOnProgress}
       mode={mode}
-      onModeChange={handleModeChange}
-      dubAvailable={dubAvailable}
     />
   );
 }

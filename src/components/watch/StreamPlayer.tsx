@@ -44,12 +44,8 @@ interface StreamPlayerProps {
   skipIntroOffset?: number;
   onEpisodeEnd?: () => void;
   onProgress?: (currentTime: number, duration: number) => void;
-  /** Current sub/dub mode */
+  /** Current sub/dub mode (read-only badge — toggle is external) */
   mode?: "sub" | "dub";
-  /** Called when user clicks the SUB/DUB toggle */
-  onModeChange?: (mode: "sub" | "dub") => void;
-  /** Whether dub is available for this anime */
-  dubAvailable?: boolean;
 }
 
 const PLAYBACK_RATES = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
@@ -80,8 +76,6 @@ export function StreamPlayer({
   onEpisodeEnd,
   onProgress,
   mode = "sub",
-  onModeChange,
-  dubAvailable = false,
 }: StreamPlayerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
