@@ -215,8 +215,16 @@ function WatchPageInner({ params }: PageProps) {
     }
   }, [anime, currentEpisode, router, mode]);
 
+  // ✅ Bug fix: Don't overwrite existing watch progress with timestamp=0.
+  // Previously, this fired on every episode change and replaced the saved
+  // progress (e.g., 10min) with 0. Now we only create a new entry if no
+  // entry exists for this episode yet.
   useEffect(() => {
     if (!anime) return;
+    const existing = history.find(
+      (e) => e.animeId === anime.id && e.episodeNumber === currentEpisode,
+    );
+    if (existing) return; // Don't overwrite existing progress
     addEntry({
       animeId: anime.id,
       episodeId: String(currentEpisode),
@@ -228,7 +236,7 @@ function WatchPageInner({ params }: PageProps) {
       genres: anime.genres ?? [],
       updatedAt: Date.now(),
     });
-  }, [anime, currentEpisode, addEntry]);
+  }, [anime, currentEpisode, addEntry, history]);
 
   if (loading) {
     return (
@@ -416,6 +424,7 @@ function WatchPageInner({ params }: PageProps) {
           episodeCount={anime.episodes}
           currentEpisode={currentEpisode}
           nextAiringEpisode={anime.nextAiringEpisode}
+          mode={mode}
         />
       </div>
     </div>

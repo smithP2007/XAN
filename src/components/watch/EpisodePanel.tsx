@@ -3,16 +3,12 @@
 // components/watch/EpisodePanel.tsx
 // Sidebar list of episodes for the watch page
 //
-// ✅ Episode unreleased grayout: uses AniList's `nextAiringEpisode` to determine
-//    which episodes haven't aired yet. Unreleased episodes are shown in grayscale,
-//    non-clickable, with a clock icon + countdown tooltip.
-//
-// ✅ AllAnime fallback: when AniList's `episodeCount` is null (unknown), fetches
-//    AllAnime's `availableEpisodes.sub` count via /api/allanime to get the real
-//    episode count.
+// ✅ Bug fix: replaced Radix ScrollArea with plain overflow-y-auto div.
+//    ScrollArea's Viewport was intercepting click events on Link components,
+//    making episode sidebar clicks not register.
+// ✅ Preserves sub/dub mode (type param) in episode links.
 
 import Link from "next/link";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { CheckCircle2, Play, Clock, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useState, useEffect } from "react";
@@ -23,8 +19,9 @@ interface EpisodePanelProps {
   animeTitle: string;
   episodeCount: number | null;
   currentEpisode: number;
-  /** AniList's nextAiringEpisode — used to determine which episodes haven't aired yet. */
   nextAiringEpisode?: NextAiringEpisode | null;
+  /** Current sub/dub mode — used to preserve type param in episode links */
+  mode?: "sub" | "dub";
 }
 
 const MAX_RENDERED = 200;
@@ -52,11 +49,11 @@ export function EpisodePanel({
   episodeCount,
   currentEpisode,
   nextAiringEpisode,
+  mode = "sub",
 }: EpisodePanelProps) {
   const [allAnimeCount, setAllAnimeCount] = useState<number | null>(null);
   const [fetchingAllAnime, setFetchingAllAnime] = useState(false);
 
-  // ✅ When AniList's episode count is unknown, fetch AllAnime's availableEpisodes.sub
   useEffect(() => {
     if (episodeCount != null) return;
     if (!animeTitle.trim()) return;
@@ -110,6 +107,9 @@ export function EpisodePanel({
   const showCurrentEpisodeHint =
     currentEpisode > cappedTotal && currentEpisode <= total;
 
+  // ✅ Preserve sub/dub mode in episode links
+  const typeParam = mode === "dub" ? "&type=dub" : "";
+
   return (
     <aside className="rounded-xl border border-xan-border bg-xan-card/50 overflow-hidden">
       <div className="px-4 py-3 border-b border-xan-border">
@@ -132,11 +132,13 @@ export function EpisodePanel({
           )}
         </p>
       </div>
-      <ScrollArea className="h-[60vh]">
+      {/* ✅ Bug fix: use plain overflow-y-auto div instead of Radix ScrollArea.
+          ScrollArea's Viewport was intercepting click events on Link components. */}
+      <div className="h-[60vh] overflow-y-auto xan-scroll">
         <div className="divide-y divide-xan-border">
           {showCurrentEpisodeHint && (
             <Link
-              href={`/watch/${animeId}?ep=${currentEpisode}`}
+              href={`/watch/${animeId}?ep=${currentEpisode}${typeParam}`}
               className="flex items-center gap-3 px-4 py-3 bg-xan-card-hover transition-colors"
             >
               <div className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 border bg-xan-crimson border-xan-crimson text-white">
@@ -161,7 +163,6 @@ export function EpisodePanel({
                   ? undefined
                   : "Not yet aired";
 
-            // Unreleased episode: grayscale, non-clickable, clock icon
             if (!isReleased) {
               return (
                 <div
@@ -186,11 +187,10 @@ export function EpisodePanel({
               );
             }
 
-            // Released episode: clickable link
             return (
               <Link
                 key={n}
-                href={`/watch/${animeId}?ep=${n}`}
+                href={`/watch/${animeId}?ep=${n}${typeParam}`}
                 className={cn(
                   "flex items-center gap-3 px-4 py-3 hover:bg-xan-card-hover transition-colors",
                   isActive && "bg-xan-card-hover",
@@ -227,7 +227,7 @@ export function EpisodePanel({
             );
           })}
         </div>
-      </ScrollArea>
+      </div>
     </aside>
   );
 }

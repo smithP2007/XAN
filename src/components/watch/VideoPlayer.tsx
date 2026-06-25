@@ -51,14 +51,19 @@ export function VideoPlayer({
   // ✅ Retry nonce — incrementing forces the fetch effect to re-run
   const [retryNonce, setRetryNonce] = useState(0);
 
+  // ✅ Bug fix: use ref for onFallbackToSub to prevent unnecessary refetches.
+  // Previously, onFallbackToSub was in the useEffect deps — if its identity
+  // changed (e.g., parent re-render), the stream would refetch.
+  const onFallbackToSubRef = useRef(onFallbackToSub);
+  useEffect(() => {
+    onFallbackToSubRef.current = onFallbackToSub;
+  });
+
   // ✅ Throttle progress reporting — max 1 write per 5 seconds.
-  // Without this, handleProgress fires ~4x/second (every timeupdate event),
-  // each time writing to localStorage via useWatchHistory.addEntry.
   const lastProgressWriteRef = useRef(0);
   const stableOnProgress = useCallback(
     (t: number, d: number) => {
       const now = Date.now();
-      // Only write to history at most once every 5 seconds, OR if we're near the end
       if (now - lastProgressWriteRef.current < 5000 && t < d * 0.95) return;
       lastProgressWriteRef.current = now;
       onProgress?.(t, d);
@@ -73,7 +78,6 @@ export function VideoPlayer({
     setLoading(true);
     setError(null);
     setStream(null);
-    // Reset progress throttle on new fetch
     lastProgressWriteRef.current = 0;
 
     const titleParam = animeTitle ? `&title=${encodeURIComponent(animeTitle)}` : "";
@@ -90,7 +94,6 @@ export function VideoPlayer({
       .then((json) => {
         if (cancelled) return;
         const s = json?.stream;
-        // ✅ Handle structured error from backend (e.g., "Episode not released yet")
         if (json?.error && (!s || !s.url)) {
           setError(json.error);
           setLoading(false);
@@ -106,9 +109,8 @@ export function VideoPlayer({
             provider: json?.provider,
           });
           setLoading(false);
-          // ✅ Notify parent if dub fell back to sub — shows a visible notice
-          if (json?.fallbackMode && onFallbackToSub) {
-            onFallbackToSub();
+          if (json?.fallbackMode) {
+            onFallbackToSubRef.current?.();
           }
         } else {
           setError("Backend returned an invalid stream response");
@@ -124,7 +126,7 @@ export function VideoPlayer({
     return () => {
       cancelled = true;
     };
-  }, [animeId, episode, animeTitle, mode, retryNonce, onFallbackToSub]);
+  }, [animeId, episode, animeTitle, mode, retryNonce]);
 
   if (error) {
     return (

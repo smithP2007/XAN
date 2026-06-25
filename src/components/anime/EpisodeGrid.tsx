@@ -15,7 +15,6 @@ import Link from "next/link";
 import { useState, useEffect } from "react";
 import { Play, Search, Clock, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import type { NextAiringEpisode } from "@/types/anime";
 
@@ -186,7 +185,8 @@ export function EpisodeGrid({
         </p>
       )}
 
-      <ScrollArea className="h-72 rounded-lg border border-xan-border bg-xan-card/50">
+      {/* ✅ Bug fix: plain overflow-y-auto div instead of ScrollArea (click interception) */}
+      <div className="h-72 overflow-y-auto rounded-lg border border-xan-border bg-xan-card/50 xan-scroll">
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 p-3">
           {filtered.length > 0 ? (
             filtered.map((n) => {
@@ -241,7 +241,7 @@ export function EpisodeGrid({
             </p>
           )}
         </div>
-      </ScrollArea>
+      </div>
     </section>
   );
 }
