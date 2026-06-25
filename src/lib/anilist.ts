@@ -57,7 +57,6 @@ async function fetchFromAniList(
 
     if (!response.ok) {
       // ✅ Retry on 429 (rate limit) AND 500/502/503/504 (server errors)
-      // AniList occasionally returns 500s under load — retrying helps.
       const shouldRetry =
         (response.status === 429 ||
           response.status === 500 ||
@@ -70,11 +69,16 @@ async function fetchFromAniList(
         const retryAfter = response.headers.get("Retry-After");
         const delay = retryAfter
           ? parseInt(retryAfter, 10) * 1000
-          : RETRY_DELAY_MS * (_retryCount + 1); // ✅ exponential backoff
+          : RETRY_DELAY_MS * (_retryCount + 1);
         await new Promise((r) => setTimeout(r, delay));
         return fetchFromAniList(query, variables, _retryCount + 1);
       }
-      console.error(`[AniList] HTTP ${response.status}: ${response.statusText}`);
+      // ✅ 404 is expected for non-existent anime IDs — don't log as error
+      if (response.status === 404) {
+        console.warn(`[AniList] 404: Resource not found (this is expected for invalid IDs)`);
+      } else {
+        console.error(`[AniList] HTTP ${response.status}: ${response.statusText}`);
+      }
       return null;
     }
 

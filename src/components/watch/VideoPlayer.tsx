@@ -19,8 +19,10 @@ interface VideoPlayerProps {
   initialMode?: "sub" | "dub";
   /** Whether dub is available for this anime (from AllAnime cross-ref) */
   dubAvailable?: boolean;
-  /** Called when user switches sub/dub — parent can update URL */
+  /** Called when user switches sub/dub — parent can update URL + localStorage */
   onModeChange?: (mode: "sub" | "dub") => void;
+  /** Called when dub was requested but fell back to sub for this episode */
+  onFallbackToSub?: () => void;
 }
 
 interface StreamData {
@@ -44,6 +46,7 @@ export function VideoPlayer({
   initialMode = "sub",
   dubAvailable = false,
   onModeChange,
+  onFallbackToSub,
 }: VideoPlayerProps) {
   const [stream, setStream] = useState<StreamData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -102,9 +105,9 @@ export function VideoPlayer({
             provider: json?.provider,
           });
           setLoading(false);
-          // ✅ Show a toast/notification if we fell back from dub to sub
-          if (json?.fallbackMode) {
-            console.warn(`[VideoPlayer] ${json.fallbackMode}`);
+          // ✅ Notify parent if dub fell back to sub — shows a visible notice
+          if (json?.fallbackMode && onFallbackToSub) {
+            onFallbackToSub();
           }
         } else {
           setError("Backend returned an invalid stream response");

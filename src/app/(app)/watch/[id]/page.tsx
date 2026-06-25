@@ -17,6 +17,7 @@ import { EpisodePanel } from "@/components/watch/EpisodePanel";
 import { VerificationBadge } from "@/components/watch/VerificationBadge";
 import { AutoPlayOverlay } from "@/components/watch/AutoPlayOverlay";
 import { SimilarAnime } from "@/components/watch/SimilarAnime";
+import { SubDubToggle, usePreferredMode } from "@/components/watch/SubDubToggle";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -56,9 +57,17 @@ function WatchPageInner({ params }: PageProps) {
   const [error, setError] = useState(false);
   const [showAutoPlay, setShowAutoPlay] = useState(false);
   const [dubAvailable, setDubAvailable] = useState(false);
+  const [checkingDub, setCheckingDub] = useState(true);
+  // ✅ Track whether dub was requested but fell back to sub for this episode
+  const [fellBackToSub, setFellBackToSub] = useState(false);
 
-  // ✅ Sub/Dub: read initial mode from URL ?type=dub
-  const initialMode = searchParams.get("type") === "dub" ? "dub" : "sub";
+  // ✅ Persistent sub/dub preference — stored in localStorage, survives across
+  // episodes and sessions. Once you pick DUB, all future episodes use DUB.
+  const [preferredMode, setPreferredMode] = usePreferredMode();
+
+  // URL ?type= overrides localStorage (for shareable links)
+  const urlMode = searchParams.get("type") === "dub" ? "dub" : null;
+  const mode = urlMode ?? preferredMode;
   const { history, addEntry } = useWatchHistory();
 
   const savedEntry = useMemo(
@@ -77,8 +86,13 @@ function WatchPageInner({ params }: PageProps) {
   useEffect(() => {
     if (!anime) return;
     let cancelled = false;
+    setCheckingDub(true);
+    setDubAvailable(false);
     const title = getTitle(anime.title);
-    if (!title.trim()) return;
+    if (!title.trim()) {
+      setCheckingDub(false);
+      return;
+    }
 
     fetch(`/api/allanime?q=${encodeURIComponent(title)}&limit=5`)
       .then(async (res) => {
@@ -97,16 +111,26 @@ function WatchPageInner({ params }: PageProps) {
           setDubAvailable(true);
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setCheckingDub(false);
+      });
 
     return () => {
       cancelled = true;
     };
   }, [anime, animeId]);
 
-  // ✅ Sub/Dub mode change handler — updates URL for shareable links
+  // ✅ Reset fallback flag when episode or mode changes
+  useEffect(() => {
+    setFellBackToSub(false);
+  }, [currentEpisode, mode]);
+
+  // ✅ Mode change handler — persists to localStorage + updates URL
   const handleModeChange = useCallback(
     (newMode: "sub" | "dub") => {
+      setPreferredMode(newMode);
+      // Also update URL for shareable links
       const params = new URLSearchParams(searchParams.toString());
       if (newMode === "dub") {
         params.set("type", "dub");
@@ -115,8 +139,13 @@ function WatchPageInner({ params }: PageProps) {
       }
       router.replace(`/watch/${animeId}?${params.toString()}`, { scroll: false });
     },
-    [searchParams, router, animeId],
+    [searchParams, router, animeId, setPreferredMode],
   );
+
+  // ✅ Called by VideoPlayer when dub falls back to sub for a specific episode
+  const handleFallbackToSub = useCallback(() => {
+    setFellBackToSub(true);
+  }, []);
 
   useEffect(() => {
     if (isNaN(animeId)) {
@@ -242,6 +271,17 @@ function WatchPageInner({ params }: PageProps) {
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
         <div className="space-y-4 min-w-0">
+          {/* ✅ External SUB/DUB toggle — lives above the player, persists in localStorage */}
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <SubDubToggle
+              mode={mode}
+              onModeChange={handleModeChange}
+              dubAvailable={dubAvailable}
+              checkingDub={checkingDub}
+              fellBackToSub={fellBackToSub}
+            />
+          </div>
+
           <div className="relative">
             <VideoPlayer
               animeId={anime.id}
@@ -252,9 +292,10 @@ function WatchPageInner({ params }: PageProps) {
               skipIntroOffset={85}
               onEpisodeEnd={handleEpisodeEnd}
               onProgress={handleProgress}
-              initialMode={initialMode}
+              initialMode={mode}
               dubAvailable={dubAvailable}
               onModeChange={handleModeChange}
+              onFallbackToSub={handleFallbackToSub}
             />
             {showAutoPlay && nextEp && (
               <AutoPlayOverlay

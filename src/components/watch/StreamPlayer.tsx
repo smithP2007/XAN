@@ -571,33 +571,11 @@ export function StreamPlayer({
               )}
             </div>
 
-            {/* ✅ SUB/DUB toggle — only show if onModeChange is provided */}
-            {onModeChange && (
-              <div className="flex items-center rounded bg-white/10 overflow-hidden">
-                <button
-                  onClick={() => onModeChange("sub")}
-                  className={`px-2 py-0.5 text-[11px] font-bold transition-colors ${
-                    mode === "sub"
-                      ? "bg-xan-crimson text-white"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                  title="Japanese audio with subtitles"
-                >
-                  SUB
-                </button>
-                <button
-                  onClick={() => dubAvailable && onModeChange("dub")}
-                  disabled={!dubAvailable}
-                  className={`px-2 py-0.5 text-[11px] font-bold transition-colors ${
-                    mode === "dub"
-                      ? "bg-xan-crimson text-white"
-                      : "text-muted-foreground hover:text-foreground"
-                  } ${!dubAvailable ? "opacity-40 cursor-not-allowed" : ""}`}
-                  title={dubAvailable ? "English dubbed audio" : "Dub not available for this anime"}
-                >
-                  DUB
-                </button>
-              </div>
+            {/* ✅ SUB/DUB mode badge (read-only — toggle is now external) */}
+            {mode && (
+              <span className="text-xs px-2 py-0.5 rounded bg-white/10 flex items-center gap-1 font-bold">
+                {mode === "dub" ? "DUB" : "SUB"}
+              </span>
             )}
 
             <span className="text-xs px-2 py-0.5 rounded bg-white/10 flex items-center gap-1">
